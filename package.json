@@ -1,0 +1,34 @@
+{
+  "name": "adv-decline",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test server/preopen.test.js server/tv/tv.test.js",
+    "dev": "vite",
+    "server": "node server/index.js",
+    "dev:all": "(npm run server &) && npm run dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tv:run": "node server/tv/cli.js",
+    "start": "node server/index.js",
+    "tv:browser": "playwright install chromium",
+    "tv:check": "node server/tv/check-downloads.js",
+    "tv:setup-browser": "node server/tv/setup-browser.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^4.21.2",
+    "node-cron": "^4.6.0",
+    "openai": "^7.15.0",
+    "playwright": "^1.63.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}

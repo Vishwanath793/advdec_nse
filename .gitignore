@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.data/
+nse-response.json
+.env
+.env.*
+!.env.example
