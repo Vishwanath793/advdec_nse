@@ -34,12 +34,20 @@ export function normalizePreopen(payload) {
   const rows = payload.data.filter((item) => typeof item?.symbol === 'string' && item.symbol.trim())
     .map((item) => ({
       SYMBOL: item.symbol.trim().toUpperCase(),
+      SERIES: typeof item.series === 'string' ? item.series.trim() : null,
       'PREV. CLOSE': number(item.prevClose),
+      'BASE PRICE': number(item.basePrice),
       'FINAL PRICE': number(item.finalPrice),
       CHANGE: number(item.change),
       '%CHANGE': number(item.perChange),
       'VALUE (₹ Crores)': crores(item.finalValue),
       'FFM CAP (₹ Crores)': crores(item.ffmMarketCap),
+      // Conviction-score inputs (same column names as pm.csv where it has them).
+      'FINAL VOLUME': number(item.finalQuantity),
+      'TOTAL BUY QTY': number(item.totalBuyQuantity),
+      'TOTAL SELL QTY': number(item.totalSellQuantity),
+      '52 WEEK HIGH': number(item.yearHigh),
+      '52 WEEK LOW': number(item.yearLow),
     }));
   if (!rows.length || !rows.some((row) => row['FINAL PRICE'] != null)) {
     throw new Error('NSE response did not contain usable stock prices.');

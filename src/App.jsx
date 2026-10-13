@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseCSV, rowsToObjects } from './utils/csv.js';
 import { analyze } from './utils/analysis.js';
+import { parseMasterFile } from './utils/master.js';
+import { CONVICTION_FACTORS } from './utils/conviction.js';
+import { isTradeable, roomToCircuit, MIN_ROOM_PCT } from './utils/tradeability.js';
 import SettingsPage from './SettingsPage.jsx';
 import TvResearchPage from './TvResearchPage.jsx';
 import { formatIST } from './NseScheduleSettings.jsx';
@@ -10,10 +13,13 @@ const STOCK_COLUMNS = [
   { key: 'symbol', label: 'Symbol' },
   { key: 'company', label: 'Company' },
   { key: 'sector', label: 'Sector' },
+  { key: 'marketCap', label: 'Mkt Cap', numeric: true },
   { key: 'prevClose', label: 'Prev Close', numeric: true },
   { key: 'finalPrice', label: 'Final Price', numeric: true },
   { key: 'change', label: 'Change', numeric: true },
   { key: 'pctChange', label: '%Chg', numeric: true },
+  { key: 'convictionScore', label: 'Conviction', numeric: true },
+  { key: 'bandPct', label: 'Circuit (Lower / Upper)', numeric: true },
   { key: 'status', label: 'Status' },
 ];
 
@@ -36,13 +42,19 @@ export default function App() {
   const [kiteStatus, setKiteStatus] = useState(null); // { type: 'info'|'error', message }
   const [masterRows, setMasterRows] = useState(null);
   const [masterError, setMasterError] = useState(null);
+  // { name, uploadedAt } for an uploaded list; null while using the bundled CSV.
+  const [masterSource, setMasterSource] = useState(null);
+  const [masterStatus, setMasterStatus] = useState(null); // { type, message }
   const [pmFileName, setPmFileName] = useState(null);
-  const [result, setResult] = useState(null);
+  const [pmRows, setPmRows] = useState(null);
+  const [priceBands, setPriceBands] = useState(null); // { fetchedAt, bands, lastError? }
+  const [priceBandError, setPriceBandError] = useState(null);
   const [error, setError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [sectorFilter, setSectorFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [tableTradeableOnly, setTableTradeableOnly] = useState(false);
   const [expandedSector, setExpandedSector] = useState(null);
   const [sortKey, setSortKey] = useState('total');
   const [sortDir, setSortDir] = useState('desc');
@@ -52,17 +64,88 @@ export default function App() {
   const appliedNseSnapshot = useRef(null);
   const autoSquareOffLockRef = useRef(false);
   const fileInputRef = useRef(null);
+  const masterInputRef = useRef(null);
+  const stocksSectionRef = useRef(null);
 
-  // Load the bundled master stock list on start.
-  useEffect(() => {
-    fetch('/master_stock.csv')
+  const loadBundledMaster = useCallback(() => {
+    return fetch('/master_stock.csv')
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.text();
       })
-      .then((text) => setMasterRows(rowsToObjects(parseCSV(text))))
+      .then((text) => {
+        setMasterRows(rowsToObjects(parseCSV(text)));
+        setMasterSource(null);
+        setMasterError(null);
+      })
       .catch((e) => setMasterError(`Could not load master_stock.csv (${e.message})`));
   }, []);
+
+  // Load the uploaded master list if one was saved, else the bundled CSV.
+  useEffect(() => {
+    fetch('/api/master-stock')
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((saved) => {
+        if (saved?.rows?.length) {
+          setMasterRows(saved.rows);
+          setMasterSource({ name: saved.name, uploadedAt: saved.uploadedAt });
+        } else {
+          loadBundledMaster();
+        }
+      });
+  }, [loadBundledMaster]);
+
+  const handleMasterFile = async (file) => {
+    if (!file) return;
+    setMasterStatus({ type: 'info', message: `Reading ${file.name}…` });
+    try {
+      const rows = await parseMasterFile(file);
+      const r = await fetch('/api/master-stock', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name, rows }),
+      });
+      const saved = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(saved.error || `HTTP ${r.status}`);
+      setMasterRows(saved.rows);
+      setMasterSource({ name: saved.name, uploadedAt: saved.uploadedAt });
+      setMasterError(null);
+      setMasterStatus({ type: 'info', message: `Master list updated: ${rows.length.toLocaleString()} symbols from ${file.name}.` });
+    } catch (e) {
+      setMasterStatus({ type: 'error', message: `Could not use ${file.name}: ${e.message}` });
+    }
+  };
+
+  const handleMasterReset = async () => {
+    if (!window.confirm('Remove the uploaded master list and go back to the bundled master_stock.csv?')) return;
+    try {
+      const r = await fetch('/api/master-stock', { method: 'DELETE' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await loadBundledMaster();
+      setMasterStatus({ type: 'info', message: 'Reverted to the bundled master_stock.csv.' });
+    } catch (e) {
+      setMasterStatus({ type: 'error', message: `Could not reset master list: ${e.message}` });
+    }
+  };
+
+  // NSE price bands (circuit %), refreshed by the backend once per IST day.
+  useEffect(() => {
+    fetch('/api/nse/price-bands')
+      .then(async (r) => {
+        const payload = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+        setPriceBands(payload);
+        setPriceBandError(payload.lastError ?? null);
+      })
+      .catch((e) => setPriceBandError(e.message));
+  }, []);
+
+  // Re-analyze whenever the pre-open data, master list or price bands change.
+  const result = useMemo(
+    () => (pmRows ? analyze(pmRows, masterRows ?? [], priceBands) : null),
+    [pmRows, masterRows, priceBands]
+  );
 
   useEffect(() => {
     let events;
@@ -87,7 +170,7 @@ export default function App() {
     const snapshot = nseData?.snapshot;
     if (!masterRows || !snapshot || appliedNseSnapshot.current === snapshot.fetchedAt) return;
     appliedNseSnapshot.current = snapshot.fetchedAt;
-    setResult(analyze(snapshot.rows, masterRows));
+    setPmRows(snapshot.rows);
     setPmFileName(`NSE pre-open · ${snapshot.marketUpdatedAt ?? formatIST(snapshot.fetchedAt)}`);
     setError(null);
     setSectorFilter('all');
@@ -239,22 +322,22 @@ export default function App() {
       const reader = new FileReader();
       reader.onload = () => {
         try {
-          const pmRows = rowsToObjects(parseCSV(String(reader.result)));
-          if (pmRows.length === 0) throw new Error('No data rows found in the file.');
-          setResult(analyze(pmRows, masterRows ?? []));
+          const rows = rowsToObjects(parseCSV(String(reader.result)));
+          if (rows.length === 0) throw new Error('No data rows found in the file.');
+          setPmRows(rows);
           setSectorFilter('all');
           setStatusFilter('all');
           setSearch('');
           setExpandedSector(null);
         } catch (e) {
           setError(`Failed to parse ${file.name}: ${e.message}`);
-          setResult(null);
+          setPmRows(null);
         }
       };
       reader.onerror = () => setError(`Could not read ${file.name}`);
       reader.readAsText(file);
     },
-    [masterRows]
+    []
   );
 
   const filteredStocks = useMemo(() => {
@@ -263,11 +346,12 @@ export default function App() {
     return result.stocks.filter((s) => {
       if (sectorFilter !== 'all' && s.sector !== sectorFilter) return false;
       if (statusFilter !== 'all' && s.status !== statusFilter) return false;
+      if (tableTradeableOnly && !isTradeable(s)) return false;
       if (q && !s.symbol.toLowerCase().includes(q) && !s.company.toLowerCase().includes(q))
         return false;
       return true;
     });
-  }, [result, sectorFilter, statusFilter, search]);
+  }, [result, sectorFilter, statusFilter, search, tableTradeableOnly]);
 
   const sortedStocks = useMemo(() => {
     if (!stockSort.key) return filteredStocks;
@@ -360,8 +444,95 @@ export default function App() {
              declineSectors: sectors.filter((s) => s.mode === 'decline') };
   }, [result, summary]);
 
+  // Top 5 gainers / losers by %change among stocks at or above the market-cap floor.
+  const topMovers = useMemo(() => {
+    if (!result) return null;
+    const floor = Number(settings.minMarketCapCr) || 0;
+    const sized = result.stocks.filter(
+      (s) => s.marketCap != null && s.marketCap >= floor && s.pctChange != null
+    );
+    const eligible = settings.tradeableOnly ? sized.filter(isTradeable) : sized;
+    const byConviction = settings.moversRankBy === 'conviction';
+    // Conviction ranking: highest score first, bigger gap breaks ties.
+    const rank = (a, b) => byConviction
+      ? (b.convictionScore ?? -1) - (a.convictionScore ?? -1) || Math.abs(b.pctChange) - Math.abs(a.pctChange)
+      : Math.abs(b.pctChange) - Math.abs(a.pctChange);
+    return {
+      eligible: eligible.length,
+      hidden: sized.length - eligible.length,
+      gainers: eligible.filter((s) => s.status === 'advance').sort(rank).slice(0, 5),
+      losers: eligible.filter((s) => s.status === 'decline').sort(rank).slice(0, 5),
+    };
+  }, [result, settings.minMarketCapCr, settings.moversRankBy, settings.tradeableOnly]);
+
+  // Tradeability badges shown beside a symbol; hover for the reason.
+  const renderFlags = (s) =>
+    s.flags?.map((f) => (
+      <span key={f.key} className={`flag ${f.severity}`} title={f.detail}>
+        {f.label}
+      </span>
+    ));
+
+  const updateSetting = (patch) => {
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    saveSettings(next);
+  };
+  const updateMinMarketCap = (value) => updateSetting({ minMarketCapCr: Math.max(0, Number(value) || 0) });
+
+  // Conviction score cell; hover shows each factor's contribution.
+  const renderConviction = (s) => {
+    const c = s.conviction;
+    if (!c || c.score == null) return <span className="hint">—</span>;
+    const tier = c.score >= 70 ? 'high' : c.score >= 50 ? 'mid' : 'low';
+    const title = [
+      `Gap-${c.direction} conviction ${c.score}/100`,
+      ...c.factors.map((f) => `• ${f.label} (weight ${f.weight}): ${Math.round(f.value * 100)} — ${f.detail}`),
+      ...(c.missing.length ? [`Not available: ${c.missing.join(', ')}`] : []),
+    ].join('\n');
+    return (
+      <span className={`conviction ${tier}`} title={title}>
+        <span className="conviction-bar" aria-hidden="true">
+          <span style={{ width: `${c.score}%` }} />
+        </span>
+        {c.score}
+      </span>
+    );
+  };
+
   const fmtCap = (v) =>
     v == null ? '—' : v >= 1e5 ? `₹${(v / 1e5).toFixed(2)} L Cr` : `₹${Math.round(v).toLocaleString('en-IN')} Cr`;
+
+  const fmtPrice = (v) => `₹${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  // Circuit limits cell. `side` limits it to one limit (top movers); default shows both.
+  const renderCircuit = (s, side) => {
+    if (s.band === 'none') {
+      return <span className="hint" title="F&O stock: NSE applies dynamic price bands, not a fixed circuit">No band (F&amp;O)</span>;
+    }
+    if (s.upperCircuit == null) return <span className="hint">—</span>;
+    const title = `${s.bandPct}% band on base price ₹${s.circuitBase}`;
+    if (side) {
+      // Room left to the circuit in the gap direction ("At UC/LC" shows as a symbol flag).
+      const room = roomToCircuit(s);
+      return (
+        <span title={title}>
+          {fmtPrice(side === 'upper' ? s.upperCircuit : s.lowerCircuit)}
+          {room != null && (
+            <span className={`hint room ${room < MIN_ROOM_PCT ? 'tight' : ''}`}> {room.toFixed(1)}% away</span>
+          )}
+        </span>
+      );
+    }
+    return (
+      <span title={title}>
+        <span className="dec-text">{fmtPrice(s.lowerCircuit)}</span>
+        {' / '}
+        <span className="adv-text">{fmtPrice(s.upperCircuit)}</span>
+        <span className="hint band-pct"> {s.bandPct}%</span>
+      </span>
+    );
+  };
 
   // Phase 2: place order via Kite when session exists; for now confirm intent.
   const buildOrderParams = (stock, action) => {
@@ -399,6 +570,10 @@ export default function App() {
   const handleTradeAction = (stock, action) => {
     const params = buildOrderParams(stock, action);
     const lines = Object.entries(params).map(([k, v]) => `${k}: ${v}`).join('\n');
+    if (stock.flags?.length) {
+      const issues = stock.flags.map((f) => `• ${f.label}: ${f.detail}`).join('\n');
+      if (!window.confirm(`${stock.symbol} has tradeability warnings:\n${issues}\n\nContinue with this ${action} order?`)) return;
+    }
     if (!session) {
       window.alert(`${lines}\n\nConnect Kite in Settings to enable order placement.`);
       return;
@@ -660,10 +835,50 @@ export default function App() {
       <header className="header">
         <h1>Pre-Market Advance / Decline Analyzer</h1>
         <p className="subtitle">
-          Scheduled NSE pre-open data or an uploaded pm.csv — sector mapping via master_stock.csv
-          {masterRows && ` (${masterRows.length.toLocaleString()} symbols loaded)`}
+          Scheduled NSE pre-open data or an uploaded pm.csv — sector mapping and market cap via the master stock list
         </p>
       </header>
+
+      <div className="master-bar">
+        <div>
+          <strong>Master stock list:</strong>{' '}
+          {masterSource ? masterSource.name : 'master_stock.csv (bundled)'}
+          {masterRows && ` · ${masterRows.length.toLocaleString()} symbols`}
+          {masterSource?.uploadedAt && (
+            <span className="hint"> · uploaded {new Date(masterSource.uploadedAt).toLocaleString('en-IN')}</span>
+          )}
+        </div>
+        <div className="master-actions">
+          <button type="button" className="btn" onClick={() => masterInputRef.current?.click()}>
+            Upload new list (.xlsx / .csv)
+          </button>
+          {masterSource && (
+            <button type="button" className="btn ghost" onClick={handleMasterReset}>
+              Use bundled list
+            </button>
+          )}
+          <input
+            ref={masterInputRef}
+            type="file"
+            accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            hidden
+            onChange={(e) => {
+              handleMasterFile(e.target.files?.[0]);
+              e.target.value = '';
+            }}
+          />
+        </div>
+        <span className="hint master-format">
+          Columns: Company Name, Industry, Symbol, and optionally Market Cap (Cr). The first sheet of an .xlsx is used.
+        </span>
+      </div>
+      {masterStatus && <div className={`alert ${masterStatus.type}`}>{masterStatus.message}</div>}
+      {priceBandError && (
+        <div className="alert warn">
+          Circuit limits: {priceBandError}
+          {priceBands ? ` Showing price bands from ${formatIST(priceBands.fetchedAt)}.` : ' The circuit column will be empty.'}
+        </div>
+      )}
 
       {masterError && (
         <div className="alert warn">
@@ -762,9 +977,230 @@ export default function App() {
           {summary.skipped > 0 && (
             <div className="alert info">
               {summary.skipped.toLocaleString()} symbol{summary.skipped > 1 ? 's' : ''} not present
-              in master_stock.csv were excluded from the analysis.
+              in the master stock list were excluded from the analysis.
             </div>
           )}
+
+          {/* Top gainers / losers among large stocks */}
+          {topMovers && (
+            <section>
+              <div className="section-head">
+                <h2>Top 5 Gainers &amp; Losers</h2>
+                <label className="cap-filter">
+                  Market cap ≥ ₹
+                  <input
+                    type="number"
+                    min="0"
+                    step="500"
+                    value={settings.minMarketCapCr}
+                    onChange={(e) => updateMinMarketCap(e.target.value)}
+                  />
+                  Cr
+                </label>
+                <label className="cap-filter">
+                  Rank by
+                  <select
+                    value={settings.moversRankBy}
+                    onChange={(e) => updateSetting({ moversRankBy: e.target.value })}
+                  >
+                    <option value="pctChange">Biggest gap</option>
+                    <option value="conviction">Conviction score</option>
+                  </select>
+                </label>
+                <label className="cap-filter" title="Hide trade-to-trade (BE/BZ) series and stocks locked at a circuit">
+                  <input
+                    type="checkbox"
+                    checked={settings.tradeableOnly}
+                    onChange={(e) => updateSetting({ tradeableOnly: e.target.checked })}
+                  />
+                  Tradeable only
+                </label>
+              </div>
+              {!result.hasMarketCap ? (
+                <div className="alert warn">
+                  The current master list has no market-cap column. Upload a list with a "Market Cap (Cr)" column to see top movers.
+                </div>
+              ) : (
+                <>
+                  <p className="hint">
+                    {topMovers.eligible.toLocaleString()} stocks meet the market-cap filter
+                    {topMovers.hidden > 0 && ` (${topMovers.hidden} untradeable hidden)`}. Ranked by{' '}
+                    {settings.moversRankBy === 'conviction' ? 'conviction score (hover a score for its breakdown)' : 'pre-open %change'}.
+                  </p>
+                  <div className="movers-grid">
+                    {[
+                      { label: 'Top Gainers ▲', list: topMovers.gainers, mode: 'advance', action: 'BUY' },
+                      { label: 'Top Losers ▼', list: topMovers.losers, mode: 'decline', action: 'SELL' },
+                    ].map(({ label, list, mode, action }) => (
+                      <div key={mode} className={`bias-card ${mode}`}>
+                        <div className="bias-head">
+                          <strong className={mode === 'advance' ? 'adv-text' : 'dec-text'}>{label}</strong>
+                        </div>
+                        {list.length === 0 ? (
+                          <p className="hint">No {mode === 'advance' ? 'gainers' : 'losers'} above this market cap.</p>
+                        ) : (
+                          <table className="bias-table">
+                            <thead>
+                              <tr>
+                                <th>#</th>
+                                <th>Symbol</th>
+                                <th>Sector</th>
+                                <th className="num">Mkt Cap</th>
+                                <th className="num">Price</th>
+                                <th className="num">%Chg</th>
+                                <th className="num">Conviction</th>
+                                <th className="num">{mode === 'advance' ? 'Upper Ckt' : 'Lower Ckt'}</th>
+                                <th className="num">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {list.map((st, i) => (
+                                <tr key={st.symbol}>
+                                  <td className="hint">{i + 1}</td>
+                                  <td className="mono symbol-cell" title={st.company}>
+                                    {st.symbol}
+                                    {renderFlags(st)}
+                                  </td>
+                                  <td>{st.sector}</td>
+                                  <td className="num">{fmtCap(st.marketCap)}</td>
+                                  <td className="num">{st.finalPrice ?? '—'}</td>
+                                  <td className={`num ${mode === 'advance' ? 'adv-text' : 'dec-text'}`}>
+                                    {st.pctChange.toFixed(2)}%
+                                  </td>
+                                  <td className="num">{renderConviction(st)}</td>
+                                  <td className="num circuit-cell">
+                                    {renderCircuit(st, mode === 'advance' ? 'upper' : 'lower')}
+                                  </td>
+                                  <td className="num">
+                                    <button
+                                      className={`btn trade ${mode === 'advance' ? 'buy' : 'sell'}`}
+                                      onClick={() => handleTradeAction(st, action)}
+                                    >
+                                      {action}
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+          )}
+
+          {/* Stock detail */}
+          <section ref={stocksSectionRef}>
+            <h2>Stocks ({filteredStocks.length.toLocaleString()})</h2>
+            <div className="filters">
+              <input
+                type="search"
+                placeholder="Search symbol or company…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <select value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)}>
+                <option value="all">All sectors</option>
+                {result.sectors.map((s) => (
+                  <option key={s.sector} value={s.sector}>
+                    {s.sector} ({s.total})
+                  </option>
+                ))}
+              </select>
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="all">All</option>
+                <option value="advance">Advances</option>
+                <option value="decline">Declines</option>
+                <option value="unchanged">Unchanged</option>
+              </select>
+              <label className="cap-filter">
+                <input
+                  type="checkbox"
+                  checked={tableTradeableOnly}
+                  onChange={(e) => setTableTradeableOnly(e.target.checked)}
+                />
+                Tradeable only
+              </label>
+            </div>
+            <div className="table-wrap tall">
+              <table className="stock-table">
+                <thead>
+                  <tr>
+                    {STOCK_COLUMNS.map(({ key, label, numeric }) => (
+                      <th
+                        key={key}
+                        scope="col"
+                        className={numeric ? 'num sortable' : 'sortable'}
+                        aria-sort={stockSort.key === key
+                          ? (stockSort.direction === 'asc' ? 'ascending' : 'descending')
+                          : 'none'}
+                      >
+                        <button
+                          type="button"
+                          className="stock-sort-button"
+                          onClick={() => toggleStockSort(key)}
+                          aria-label={`Sort by ${label} ${stockSort.key === key && stockSort.direction === 'asc' ? 'descending' : 'ascending'}`}
+                        >
+                          {label}
+                          <span className="sort-indicator" aria-hidden="true">
+                            {stockSort.key === key ? (stockSort.direction === 'asc' ? '▲' : '▼') : '↕'}
+                          </span>
+                        </button>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedStocks.map((s) => (
+                    <tr key={s.symbol}>
+                      <td className="mono symbol-cell">
+                        {s.symbol}
+                        {renderFlags(s)}
+                      </td>
+                      <td>{s.company}</td>
+                      <td>{s.sector}</td>
+                      <td className="num">{fmtCap(s.marketCap)}</td>
+                      <td className="num">{s.prevClose ?? '—'}</td>
+                      <td className="num">{s.finalPrice ?? '—'}</td>
+                      <td className={`num ${s.change > 0 ? 'adv-text' : s.change < 0 ? 'dec-text' : ''}`}>
+                        {s.change ?? '—'}
+                      </td>
+                      <td className={`num ${s.pctChange > 0 ? 'adv-text' : s.pctChange < 0 ? 'dec-text' : ''}`}>
+                        {s.pctChange ?? '—'}
+                      </td>
+                      <td className="num">{renderConviction(s)}</td>
+                      <td className="num circuit-cell">{renderCircuit(s)}</td>
+                      <td>
+                        <span className={`badge ${s.status}`}>
+                          {s.status === 'advance' ? '▲ Adv' : s.status === 'decline' ? '▼ Dec' : '● Unch'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="hint">
+              Conviction (0–100) scores how strongly the pre-open supports the gap continuing:{' '}
+              {CONVICTION_FACTORS.map((f) => `${f.label} ${f.weight}`).join(' · ')}. Factors without data are
+              left out and the rest rescaled. Hover a score for its breakdown. It ranks setups — it does not
+              predict the open.
+            </p>
+            <p className="hint">
+              Flags beside a symbol (hover for details): <span className="flag block">red</span> = likely not
+              tradeable intraday — trade-to-trade series (BE/BZ, delivery only) or locked at a circuit;{' '}
+              <span className="flag warn">amber</span> = caution — NSE GSM surveillance, non-EQ series, or less
+              than {MIN_ROOM_PCT}% left to the circuit. ASM surveillance is not in NSE's band list, so it isn't
+              flagged here. Check your broker for the final word.
+            </p>
+            <p className="hint">
+              Circuit = base price (prev close) ± the stock's NSE price band %, rounded to the tick
+              {priceBands && ` (NSE band list fetched ${formatIST(priceBands.fetchedAt)})`}. Limits apply to the session of the loaded pre-open data. F&amp;O stocks have dynamic bands, not fixed circuits.
+            </p>
+          </section>
 
           {/* Sector bias spotlight */}
           {bias && (bias.advanceSectors.length > 0 || bias.declineSectors.length > 0) && (
@@ -780,10 +1216,10 @@ export default function App() {
               ].map(
                 ({ label, list, mode }) =>
                   list.length > 0 && (
-                    <div key={mode} className="bias-group">
-                      <h3 className={mode === 'advance' ? 'adv-text' : 'dec-text'}>
+                    <details key={mode} className={`bias-group accordion ${mode}`}>
+                      <summary className={mode === 'advance' ? 'adv-text' : 'dec-text'}>
                         {label} ({list.length})
-                      </h3>
+                      </summary>
                       <div className="bias-grid">
                         {list.map((s) => (
                           <div key={s.sector} className={`bias-card ${mode}`}>
@@ -832,7 +1268,7 @@ export default function App() {
                           </div>
                         ))}
                       </div>
-                    </div>
+                    </details>
                   )
               )}
             </section>
@@ -884,6 +1320,7 @@ export default function App() {
                         onClick={() => {
                           setExpandedSector(isOpen ? null : s.sector);
                           setSectorFilter(isOpen ? 'all' : s.sector);
+                          if (!isOpen) stocksSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                         }}
                       >
                         <td>{s.sector}</td>
@@ -910,88 +1347,10 @@ export default function App() {
               </table>
             </div>
             <p className="hint">
-              Click a sector row to filter the stock list below. Click a column header to sort.
+              Click a sector row to filter the stock list above. Click a column header to sort.
             </p>
           </section>
 
-          {/* Stock detail */}
-          <section>
-            <h2>Stocks ({filteredStocks.length.toLocaleString()})</h2>
-            <div className="filters">
-              <input
-                type="search"
-                placeholder="Search symbol or company…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              <select value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)}>
-                <option value="all">All sectors</option>
-                {result.sectors.map((s) => (
-                  <option key={s.sector} value={s.sector}>
-                    {s.sector} ({s.total})
-                  </option>
-                ))}
-              </select>
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                <option value="all">All</option>
-                <option value="advance">Advances</option>
-                <option value="decline">Declines</option>
-                <option value="unchanged">Unchanged</option>
-              </select>
-            </div>
-            <div className="table-wrap tall">
-              <table className="stock-table">
-                <thead>
-                  <tr>
-                    {STOCK_COLUMNS.map(({ key, label, numeric }) => (
-                      <th
-                        key={key}
-                        scope="col"
-                        className={numeric ? 'num sortable' : 'sortable'}
-                        aria-sort={stockSort.key === key
-                          ? (stockSort.direction === 'asc' ? 'ascending' : 'descending')
-                          : 'none'}
-                      >
-                        <button
-                          type="button"
-                          className="stock-sort-button"
-                          onClick={() => toggleStockSort(key)}
-                          aria-label={`Sort by ${label} ${stockSort.key === key && stockSort.direction === 'asc' ? 'descending' : 'ascending'}`}
-                        >
-                          {label}
-                          <span className="sort-indicator" aria-hidden="true">
-                            {stockSort.key === key ? (stockSort.direction === 'asc' ? '▲' : '▼') : '↕'}
-                          </span>
-                        </button>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedStocks.map((s) => (
-                    <tr key={s.symbol}>
-                      <td className="mono">{s.symbol}</td>
-                      <td>{s.company}</td>
-                      <td>{s.sector}</td>
-                      <td className="num">{s.prevClose ?? '—'}</td>
-                      <td className="num">{s.finalPrice ?? '—'}</td>
-                      <td className={`num ${s.change > 0 ? 'adv-text' : s.change < 0 ? 'dec-text' : ''}`}>
-                        {s.change ?? '—'}
-                      </td>
-                      <td className={`num ${s.pctChange > 0 ? 'adv-text' : s.pctChange < 0 ? 'dec-text' : ''}`}>
-                        {s.pctChange ?? '—'}
-                      </td>
-                      <td>
-                        <span className={`badge ${s.status}`}>
-                          {s.status === 'advance' ? '▲ Adv' : s.status === 'decline' ? '▼ Dec' : '● Unch'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
         </>
       )}
         </>

@@ -8,14 +8,18 @@
 import express from 'express';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { createPreopenService, validateSchedule } from './preopen.js';
 import dotenv from 'dotenv';
 import { createTvService } from './tv/service.js';
+import { createPriceBandService } from './priceBands.js';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)), quiet: true });
 
 const app = express();
-app.use(express.json());
+// Larger master-list uploads parse their own body below.
+app.use((req, res, next) => (req.path === '/api/master-stock' ? next() : express.json()(req, res, next)));
 
 const tv = createTvService({ root: fileURLToPath(new URL('../.data/tv', import.meta.url)) });
 app.use('/api/tv', (req, res, next) => {
@@ -74,6 +78,45 @@ app.post('/api/nse/preopen/refresh', async (_req, res) => {
   } catch (error) {
     res.status(502).json({ error: error.message });
   }
+});
+
+const priceBands = createPriceBandService({ file: fileURLToPath(new URL('../.data/nse-price-bands.json', import.meta.url)) });
+app.get('/api/nse/price-bands', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(await priceBands.get({ force: req.query.refresh === '1' })); }
+  catch (error) { res.status(502).json({ error: error.message }); }
+});
+
+// Uploaded master stock list (parsed in the browser), persisted so it survives
+// restarts. When absent, the UI falls back to the bundled public/master_stock.csv.
+const masterFile = fileURLToPath(new URL('../.data/master-stock.json', import.meta.url));
+app.get('/api/master-stock', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.type('json').send(readFileSync(masterFile, 'utf8')); }
+  catch (error) {
+    if (error.code === 'ENOENT') return res.status(404).json({ error: 'No uploaded master list.' });
+    res.status(500).json({ error: `Could not read master list: ${error.message}` });
+  }
+});
+app.put('/api/master-stock', express.json({ limit: '10mb' }), (req, res) => {
+  const { name, rows } = req.body ?? {};
+  if (typeof name !== 'string' || !Array.isArray(rows) || rows.length === 0
+      || !rows.every((r) => r && typeof r === 'object' && typeof r.Symbol === 'string' && r.Symbol.trim())) {
+    return res.status(400).json({ error: 'Provide a file name and rows that each have a Symbol.' });
+  }
+  const saved = { name, uploadedAt: new Date().toISOString(), rows };
+  try {
+    mkdirSync(dirname(masterFile), { recursive: true });
+    writeFileSync(`${masterFile}.tmp`, JSON.stringify(saved));
+    renameSync(`${masterFile}.tmp`, masterFile);
+    res.json(saved);
+  } catch (error) {
+    res.status(500).json({ error: `Could not save master list: ${error.message}` });
+  }
+});
+app.delete('/api/master-stock', (_req, res) => {
+  rmSync(masterFile, { force: true });
+  res.status(204).end();
 });
 
 app.post('/api/kite/session', async (req, res) => {
