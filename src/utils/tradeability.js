@@ -53,6 +53,15 @@ export function tradeFlags(stock) {
     });
   }
 
+  if (stock.exDate?.length) {
+    flags.push({
+      key: 'exdate',
+      label: 'Ex-date',
+      severity: 'warn',
+      detail: `Ex-date today (${stock.exDate.join('; ')}): part of the gap may be a price adjustment for the corporate action, not demand.`,
+    });
+  }
+
   if (circuitHit) {
     const upper = circuitHit === 'upper';
     flags.push({

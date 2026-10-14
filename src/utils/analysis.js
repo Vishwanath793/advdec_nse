@@ -2,6 +2,7 @@ import { toNumber } from './csv.js';
 import { marketCapKey, marketCapOf } from './master.js';
 import { scoreConviction } from './conviction.js';
 import { tradeFlags } from './tradeability.js';
+import { applySignals } from './signals.js';
 
 const num = (v) => {
   const n = toNumber(v);
@@ -46,8 +47,12 @@ export function circuitFor(band, basePrice, finalPrice) {
  * `secList` (optional) is the parsed NSE security list: `bands` maps SYMBOL ->
  * price band % or 'none' (F&O, dynamic limits); `info` maps SYMBOL ->
  * { series, remarks } for the tradeability checks.
+ *
+ * `options.convictionFactors` ({ key: { on, weight } }) adjusts the conviction
+ * score's factors; defaults apply when omitted. `options.context` (from
+ * /api/nse/context) adds yesterday's range, relative volume and corporate events.
  */
-export function analyze(pmRows, masterRows, secList = null) {
+export function analyze(pmRows, masterRows, secList = null, options = {}) {
   const bands = secList?.bands;
   const info = secList?.info ?? {};
   const sectorBySymbol = new Map();
@@ -128,19 +133,21 @@ export function analyze(pmRows, masterRows, secList = null) {
       sellQty: num(row['TOTAL SELL QTY']),
       yearHigh: num(row['52 WEEK HIGH']),
       yearLow: num(row['52 WEEK LOW']),
+      finalVolume: num(row['FINAL VOLUME']),
       // Pre-open data carries the session's series; uploads fall back to the NSE list.
       series: String(row['SERIES'] ?? '').trim() || info[symbol]?.series || null,
       surveillance: info[symbol]?.remarks || null,
       status,
     });
   }
+  applySignals(stocks, options.context);
   for (const stock of stocks) stock.flags = tradeFlags(stock);
 
   const sectors = [...sectorMap.values()].sort((a, b) => b.total - a.total);
   const total = advances + declines + unchanged;
   const adRatio = declines > 0 ? advances / declines : advances > 0 ? Infinity : null;
   const summary = { total, advances, declines, unchanged, skipped, adRatio };
-  scoreConviction(stocks, sectors, summary);
+  scoreConviction(stocks, sectors, summary, options.convictionFactors);
 
   return {
     summary,

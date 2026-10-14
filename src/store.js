@@ -1,3 +1,5 @@
+import { DEFAULT_FACTOR_SETTINGS } from './utils/conviction.js';
+
 const SETTINGS_KEY = 'ad_settings_v1';
 const SESSION_KEY = 'ad_kite_session_v1';
 
@@ -29,6 +31,7 @@ export const DEFAULT_SETTINGS = {
   minMarketCapCr: 5000,     // top gainers/losers: market cap (master list) >= this ₹ Cr
   moversRankBy: 'pctChange', // top gainers/losers ranking: 'pctChange' | 'conviction'
   tradeableOnly: true,       // top gainers/losers: hide T2T series and circuit-locked stocks
+  convictionFactors: DEFAULT_FACTOR_SETTINGS, // { key: { on, weight } } for the conviction score
   maxResults: 50,
 };
 

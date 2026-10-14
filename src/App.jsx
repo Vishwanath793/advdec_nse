@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseCSV, rowsToObjects } from './utils/csv.js';
 import { analyze } from './utils/analysis.js';
 import { parseMasterFile } from './utils/master.js';
-import { CONVICTION_FACTORS } from './utils/conviction.js';
+import { CONVICTION_FACTORS, DEFAULT_FACTOR_SETTINGS, factorWeights, MIN_GAP_PCT } from './utils/conviction.js';
 import { isTradeable, roomToCircuit, MIN_ROOM_PCT } from './utils/tradeability.js';
+import { HIGH_RVOL_X } from './utils/signals.js';
 import SettingsPage from './SettingsPage.jsx';
 import TvResearchPage from './TvResearchPage.jsx';
 import { formatIST } from './NseScheduleSettings.jsx';
@@ -19,6 +20,7 @@ const STOCK_COLUMNS = [
   { key: 'change', label: 'Change', numeric: true },
   { key: 'pctChange', label: '%Chg', numeric: true },
   { key: 'convictionScore', label: 'Conviction', numeric: true },
+  { key: 'rvolX', label: 'Signals', numeric: true },
   { key: 'bandPct', label: 'Circuit (Lower / Upper)', numeric: true },
   { key: 'status', label: 'Status' },
 ];
@@ -48,6 +50,8 @@ export default function App() {
   const [pmFileName, setPmFileName] = useState(null);
   const [pmRows, setPmRows] = useState(null);
   const [priceBands, setPriceBands] = useState(null); // { fetchedAt, bands, lastError? }
+  const [marketContext, setMarketContext] = useState(null); // { history, events, error } from /api/nse/context
+  const [marketContextError, setMarketContextError] = useState(null);
   const [priceBandError, setPriceBandError] = useState(null);
   const [error, setError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
@@ -61,6 +65,8 @@ export default function App() {
   const [stockSort, setStockSort] = useState({ key: null, direction: 'asc' });
   const [nseData, setNseData] = useState(null);
   const [nseConnectionError, setNseConnectionError] = useState(null);
+  const [nseFetching, setNseFetching] = useState(false);
+  const [nseFetchStatus, setNseFetchStatus] = useState(null); // { type, message }
   const appliedNseSnapshot = useRef(null);
   const autoSquareOffLockRef = useRef(false);
   const fileInputRef = useRef(null);
@@ -117,6 +123,27 @@ export default function App() {
     }
   };
 
+  // Manual NSE pre-open fetch (same backend job as the scheduled 09:10 IST run).
+  const handleNseFetchNow = async () => {
+    setNseFetching(true);
+    setNseFetchStatus(null);
+    try {
+      const r = await fetch('/api/nse/preopen/refresh', { method: 'POST' });
+      const payload = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+      setNseData((current) => ({ ...current, ...payload }));
+      setNseConnectionError(null);
+      setNseFetchStatus({
+        type: 'info',
+        message: `NSE data loaded${payload.snapshot?.marketUpdatedAt ? ` (NSE timestamp ${payload.snapshot.marketUpdatedAt} IST)` : ''}.`,
+      });
+    } catch (e) {
+      setNseFetchStatus({ type: 'error', message: `NSE fetch failed: ${e.message} The previous data is kept.` });
+    } finally {
+      setNseFetching(false);
+    }
+  };
+
   const handleMasterReset = async () => {
     if (!window.confirm('Remove the uploaded master list and go back to the bundled master_stock.csv?')) return;
     try {
@@ -128,6 +155,23 @@ export default function App() {
       setMasterStatus({ type: 'error', message: `Could not reset master list: ${e.message}` });
     }
   };
+
+  // Yesterday's range, average volume and today's corporate events. Reloaded with
+  // each new NSE snapshot; the backend caches and refreshes events every 10 minutes.
+  const snapshotFetchedAt = nseData?.snapshot?.fetchedAt;
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/nse/context')
+      .then(async (r) => {
+        const payload = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+        if (cancelled) return;
+        setMarketContext(payload);
+        setMarketContextError(payload.error ?? null);
+      })
+      .catch((e) => { if (!cancelled) setMarketContextError(e.message); });
+    return () => { cancelled = true; };
+  }, [snapshotFetchedAt]);
 
   // NSE price bands (circuit %), refreshed by the backend once per IST day.
   useEffect(() => {
@@ -143,8 +187,10 @@ export default function App() {
 
   // Re-analyze whenever the pre-open data, master list or price bands change.
   const result = useMemo(
-    () => (pmRows ? analyze(pmRows, masterRows ?? [], priceBands) : null),
-    [pmRows, masterRows, priceBands]
+    () => (pmRows
+      ? analyze(pmRows, masterRows ?? [], priceBands, { convictionFactors: settings.convictionFactors, context: marketContext })
+      : null),
+    [pmRows, masterRows, priceBands, settings.convictionFactors, marketContext]
   );
 
   useEffect(() => {
@@ -473,6 +519,43 @@ export default function App() {
       </span>
     ));
 
+  // Decision signals (results, relative volume, gap vs yesterday's range).
+  // `compact` (top movers) shows only the notable ones.
+  const renderSignals = (s, compact = false) => {
+    const items = [];
+    if (s.results?.length) {
+      const r = s.results[0];
+      items.push({ key: 'results', cls: 'good', label: 'Results', title: `${formatIST(r.at)}: ${r.text}` });
+    }
+    if (s.resultsDue) {
+      items.push({ key: 'due', cls: 'warn', label: 'Results due', title: `Board meeting today (${s.resultsDue}): results may come during market hours.` });
+    }
+    if (s.rvolX != null && (!compact || s.rvolX >= HIGH_RVOL_X)) {
+      const x = s.rvolX >= 10 ? Math.round(s.rvolX) : s.rvolX.toFixed(1);
+      items.push({
+        key: 'rvol',
+        cls: s.rvolX >= HIGH_RVOL_X ? 'high' : 'muted',
+        label: `Vol ${x}×`,
+        title: `Pre-open quantity ${s.finalVolume?.toLocaleString('en-IN')} = ${s.rvolPct.toFixed(2)}% of its 20-day average daily volume (${Math.round(s.avgVolume).toLocaleString('en-IN')}); ${x}× the typical stock, higher than ${Math.round(s.rvolRank * 100)}% of stocks.`,
+      });
+    }
+    if (s.rangeBreak === 'above' || s.rangeBreak === 'below') {
+      const above = s.rangeBreak === 'above';
+      items.push({
+        key: 'range',
+        cls: 'good',
+        label: above ? 'Above PDH' : 'Below PDL',
+        title: `Opening ${above ? `above yesterday's high ₹${s.prevHigh}` : `below yesterday's low ₹${s.prevLow}`} (yesterday's range ₹${s.prevLow}–₹${s.prevHigh}): a true gap.`,
+      });
+    } else if (s.rangeBreak === 'inside' && !compact) {
+      items.push({ key: 'range', cls: 'muted', label: 'Inside PD range', title: `Opening inside yesterday's range ₹${s.prevLow}–₹${s.prevHigh}.` });
+    }
+    if (!items.length) return compact ? null : <span className="hint">—</span>;
+    return items.map((i) => (
+      <span key={i.key} className={`sig ${i.cls}`} title={i.title}>{i.label}</span>
+    ));
+  };
+
   const updateSetting = (patch) => {
     const next = { ...settings, ...patch };
     setSettings(next);
@@ -480,15 +563,30 @@ export default function App() {
   };
   const updateMinMarketCap = (value) => updateSetting({ minMarketCapCr: Math.max(0, Number(value) || 0) });
 
+  // Conviction factor on/off + weights (saved with the other settings).
+  const factorSetting = (key) => ({ ...DEFAULT_FACTOR_SETTINGS[key], ...settings.convictionFactors?.[key] });
+  const activeWeights = factorWeights(settings.convictionFactors);
+  const activeTotal = Object.values(activeWeights).reduce((a, b) => a + b, 0);
+  const activeCount = Object.values(activeWeights).filter(Boolean).length;
+  const factorsCustomised = JSON.stringify(activeWeights) !== JSON.stringify(factorWeights(DEFAULT_FACTOR_SETTINGS));
+  const updateFactor = (key, patch) => updateSetting({
+    convictionFactors: { ...DEFAULT_FACTOR_SETTINGS, ...settings.convictionFactors, [key]: { ...factorSetting(key), ...patch } },
+  });
+  const setFactorWeight = (key, value) => updateFactor(key, { weight: Math.min(100, Math.max(0, Math.round(Number(value) || 0))) });
+
   // Conviction score cell; hover shows each factor's contribution.
   const renderConviction = (s) => {
     const c = s.conviction;
-    if (!c || c.score == null) return <span className="hint">—</span>;
+    if (!c || c.score == null) {
+      const small = s.pctChange != null && s.pctChange !== 0 && Math.abs(s.pctChange) < MIN_GAP_PCT;
+      return <span className="hint" title={small ? `Gap under ${MIN_GAP_PCT}%: not a gap trade, not scored` : undefined}>—</span>;
+    }
     const tier = c.score >= 70 ? 'high' : c.score >= 50 ? 'mid' : 'low';
     const title = [
       `Gap-${c.direction} conviction ${c.score}/100`,
       ...c.factors.map((f) => `• ${f.label} (weight ${f.weight}): ${Math.round(f.value * 100)} — ${f.detail}`),
       ...(c.missing.length ? [`Not available: ${c.missing.join(', ')}`] : []),
+      ...(c.excluded.length ? [`Turned off: ${c.excluded.join(', ')}`] : []),
     ].join('\n');
     return (
       <span className={`conviction ${tier}`} title={title}>
@@ -873,6 +971,12 @@ export default function App() {
         </span>
       </div>
       {masterStatus && <div className={`alert ${masterStatus.type}`}>{masterStatus.message}</div>}
+      {marketContextError && (
+        <div className="alert warn">
+          Signals (results, ex-dates, volume, yesterday's range): {marketContextError}
+          {marketContext?.history?.asOf ? ` Using end-of-day data up to ${marketContext.history.asOf}.` : ''}
+        </div>
+      )}
       {priceBandError && (
         <div className="alert warn">
           Circuit limits: {priceBandError}
@@ -886,11 +990,22 @@ export default function App() {
         </div>
       )}
 
-      <div className="alert info">
-        {nseData?.config.enabled ? `Next NSE fetch: ${formatIST(nseData.nextRun)}.` : nseData ? 'Automatic NSE fetch is disabled.' : 'Loading NSE schedule…'}
-        {' '}<a className="nse-settings-link" href="#/settings">Configure in Settings</a>
-        {nseData?.snapshot && <div>NSE data timestamp: {nseData.snapshot.marketUpdatedAt ?? 'Not supplied'}{nseData.snapshot.marketUpdatedAt ? ' IST' : ''}. Fetched: {formatIST(nseData.snapshot.fetchedAt)}.</div>}
+      <div className="alert info nse-bar">
+        <div>
+          {nseData?.config.enabled ? `Next NSE fetch: ${formatIST(nseData.nextRun)}.` : nseData ? 'Automatic NSE fetch is disabled.' : 'Loading NSE schedule…'}
+          {' '}<a className="nse-settings-link" href="#/settings">Configure in Settings</a>
+          {nseData?.snapshot && <div>NSE data timestamp: {nseData.snapshot.marketUpdatedAt ?? 'Not supplied'}{nseData.snapshot.marketUpdatedAt ? ' IST' : ''}. Fetched: {formatIST(nseData.snapshot.fetchedAt)}.</div>}
+        </div>
+        <button
+          type="button"
+          className="btn primary"
+          disabled={!nseData || nseFetching || nseData.running}
+          onClick={handleNseFetchNow}
+        >
+          {nseFetching || nseData?.running ? 'Fetching…' : 'Fetch NSE data now'}
+        </button>
       </div>
+      {nseFetchStatus && <div role="status" className={`alert ${nseFetchStatus.type}`}>{nseFetchStatus.message}</div>}
       {(nseConnectionError || nseData?.lastError) && <div className="alert warn">{nseConnectionError || nseData.lastError}</div>}
 
       <div
@@ -981,6 +1096,73 @@ export default function App() {
             </div>
           )}
 
+          {/* Conviction factor controls */}
+          <details className="conviction-settings">
+            <summary>
+              Conviction factors{' '}
+              <span className="hint">({activeCount} of {CONVICTION_FACTORS.length} on{factorsCustomised ? ', customised' : ''})</span>
+            </summary>
+            <p className="hint">
+              Turn factors off or change their weight. Weights are relative: the factors that are on are rescaled to
+              100, shown as “share”. Changes apply instantly and are saved in this browser.
+            </p>
+            <div className="factor-grid">
+              {CONVICTION_FACTORS.map((f) => {
+                const s = factorSetting(f.key);
+                const active = activeWeights[f.key] > 0;
+                return (
+                  <div key={f.key} className={`factor-row ${active ? '' : 'off'}`}>
+                    <label className="factor-toggle">
+                      <input
+                        type="checkbox"
+                        checked={s.on}
+                        onChange={(e) => updateFactor(f.key, { on: e.target.checked })}
+                      />
+                      <strong>{f.label}</strong>
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="50"
+                      step="5"
+                      value={Math.min(s.weight, 50)}
+                      disabled={!s.on}
+                      aria-label={`${f.label} weight`}
+                      onChange={(e) => setFactorWeight(f.key, e.target.value)}
+                    />
+                    <input
+                      type="number"
+                      className="factor-weight"
+                      min="0"
+                      max="100"
+                      value={s.weight}
+                      disabled={!s.on}
+                      aria-label={`${f.label} weight value`}
+                      onChange={(e) => setFactorWeight(f.key, e.target.value)}
+                    />
+                    <span className="factor-share">
+                      {active ? `${Math.round((activeWeights[f.key] / activeTotal) * 100)}% share` : 'off'}
+                    </span>
+                    <span className="hint factor-help">{f.help}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="factor-actions">
+              <button
+                type="button"
+                className="btn"
+                disabled={!factorsCustomised}
+                onClick={() => updateSetting({ convictionFactors: DEFAULT_FACTOR_SETTINGS })}
+              >
+                Reset to defaults
+              </button>
+            </div>
+            {activeCount === 0 && (
+              <div className="alert warn">All factors are off, so no stock gets a conviction score.</div>
+            )}
+          </details>
+
           {/* Top gainers / losers among large stocks */}
           {topMovers && (
             <section>
@@ -1060,6 +1242,7 @@ export default function App() {
                                   <td className="mono symbol-cell" title={st.company}>
                                     {st.symbol}
                                     {renderFlags(st)}
+                                    {renderSignals(st, true)}
                                   </td>
                                   <td>{st.sector}</td>
                                   <td className="num">{fmtCap(st.marketCap)}</td>
@@ -1172,6 +1355,7 @@ export default function App() {
                         {s.pctChange ?? '—'}
                       </td>
                       <td className="num">{renderConviction(s)}</td>
+                      <td className="signals-cell">{renderSignals(s)}</td>
                       <td className="num circuit-cell">{renderCircuit(s)}</td>
                       <td>
                         <span className={`badge ${s.status}`}>
@@ -1184,10 +1368,22 @@ export default function App() {
               </table>
             </div>
             <p className="hint">
-              Conviction (0–100) scores how strongly the pre-open supports the gap continuing:{' '}
-              {CONVICTION_FACTORS.map((f) => `${f.label} ${f.weight}`).join(' · ')}. Factors without data are
-              left out and the rest rescaled. Hover a score for its breakdown. It ranks setups — it does not
-              predict the open.
+              Conviction (0–100) scores how strongly the pre-open supports the gap continuing. Factors in use:{' '}
+              {CONVICTION_FACTORS.filter((f) => activeWeights[f.key]).map((f) => `${f.label} ${activeWeights[f.key]}`).join(' · ') || 'none'}
+              {' '}(buy/sell orders count ¼ for F&amp;O stocks); adjust them in “Conviction factors” above. Gaps
+              under {MIN_GAP_PCT}% are not scored. Factors without data are left out and the rest rescaled. Hover a
+              score for its breakdown. It ranks setups — it does not predict the open.
+            </p>
+            <p className="hint">
+              Signals (hover for details): <span className="sig good">Results</span> = results announced since the
+              last close; <span className="sig warn">Results due</span> = board meeting for results today;{' '}
+              <span className="sig high">Vol 34×</span> = pre-open quantity vs the stock's 20-day average volume,
+              as a multiple of the typical stock (highlighted at {HIGH_RVOL_X}× or more);{' '}
+              <span className="sig good">Above PDH</span> / <span className="sig good">Below PDL</span> = opening
+              beyond yesterday's high / low (a true gap). An <span className="flag warn">Ex-date</span> flag means
+              part of the gap may be a corporate-action adjustment.
+              {marketContext?.history?.asOf && ` End-of-day data up to ${marketContext.history.asOf} (${marketContext.history.days} sessions).`}
+              {marketContext?.events?.fetchedAt && ` Corporate events checked ${formatIST(marketContext.events.fetchedAt)}.`}
             </p>
             <p className="hint">
               Flags beside a symbol (hover for details): <span className="flag block">red</span> = likely not

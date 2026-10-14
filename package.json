@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "test": "node --test server/preopen.test.js server/priceBands.test.js server/conviction.test.js server/tradeability.test.js server/tv/tv.test.js",
+    "test": "node --test server/preopen.test.js server/priceBands.test.js server/conviction.test.js server/tradeability.test.js server/marketContext.test.js server/tv/tv.test.js",
     "dev": "vite",
     "server": "node server/index.js",
     "dev:all": "(npm run server &) && npm run dev",

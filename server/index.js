@@ -14,6 +14,8 @@ import { createPreopenService, validateSchedule } from './preopen.js';
 import dotenv from 'dotenv';
 import { createTvService } from './tv/service.js';
 import { createPriceBandService } from './priceBands.js';
+import { createMarketContextService } from './marketContext.js';
+import cron from 'node-cron';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)), quiet: true });
 
@@ -86,6 +88,18 @@ app.get('/api/nse/price-bands', async (req, res) => {
   try { res.json(await priceBands.get({ force: req.query.refresh === '1' })); }
   catch (error) { res.status(502).json({ error: error.message }); }
 });
+
+// Yesterday's range, average volume and today's corporate events (results, ex-dates).
+const marketContext = createMarketContextService({ dir: fileURLToPath(new URL('../.data', import.meta.url)) });
+app.get('/api/nse/context', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(await marketContext.get({ force: req.query.refresh === '1' })); }
+  catch (error) { res.status(502).json({ error: error.message }); }
+});
+// Warm the cache before the 09:10 pre-open fetch on weekdays.
+cron.schedule('50 8 * * 1-5', () => {
+  marketContext.get({ force: true }).catch((error) => console.error(`Market context: ${error.message}`));
+}, { timezone: 'Asia/Kolkata', name: 'market-context' });
 
 // Uploaded master stock list (parsed in the browser), persisted so it survives
 // restarts. When absent, the UI falls back to the bundled public/master_stock.csv.
