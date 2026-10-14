@@ -1,0 +1,68 @@
+name: Android APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write # publish the APK to the "android-latest" release on main
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Copy web app into the Android project
+        run: npx cap sync android
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Name the APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk "advance-decline-${{ github.run_number }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: advance-decline-apk-${{ github.run_number }}
+          path: advance-decline-${{ github.run_number }}.apk
+          if-no-files-found: error
+
+      - name: Publish to the "android-latest" release (main only)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest "advance-decline-${{ github.run_number }}.apk" \
+            --target "${{ github.sha }}" \
+            --prerelease \
+            --title "Android app (build ${{ github.run_number }})" \
+            --notes "Latest Android build from main (${{ github.sha }}). On your phone: download the .apk below, open it, and allow installing from your browser if asked. New builds install over the old one and keep your data."

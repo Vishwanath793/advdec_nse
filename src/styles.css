@@ -521,3 +521,45 @@ tbody tr { border-top: 1px solid var(--border); }
 .sig.high { background: rgba(34, 197, 94, 0.15); color: var(--green); border-color: rgba(34, 197, 94, 0.45); }
 .sig.warn { background: rgba(245, 158, 11, 0.15); color: var(--amber); border-color: rgba(245, 158, 11, 0.4); }
 .sig.muted { color: var(--muted); border-color: var(--border); font-weight: 500; }
+
+/* Android app: keep content clear of the status and navigation bars.
+   Capacitor sets --safe-area-inset-*; in a browser they are unset (0). */
+body {
+  padding:
+    var(--safe-area-inset-top, 0px) var(--safe-area-inset-right, 0px)
+    var(--safe-area-inset-bottom, 0px) var(--safe-area-inset-left, 0px);
+}
+
+/* Phone layout */
+@media (max-width: 600px) {
+  .page { padding: 12px 12px 48px; }
+  .header h1 { font-size: 1.2rem; }
+  .subtitle { font-size: 0.85rem; margin-bottom: 14px; }
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+    gap: 4px;
+    flex-wrap: wrap;
+    padding-top: 6px;
+    margin-bottom: 14px;
+  }
+  .nav-link { padding: 6px 8px; font-size: 0.9rem; }
+  .nav-kite { margin-left: 0; flex-basis: 100%; text-align: center; }
+  .master-bar { padding: 10px 12px; }
+  .master-actions .btn { flex: 1 1 auto; }
+  .nse-bar .btn { width: 100%; }
+  .dropzone { padding: 18px; }
+  .drop-icon { font-size: 1.5rem; }
+  .cards { grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 16px 0 12px; }
+  .card { padding: 12px; }
+  .card.total { grid-column: 1 / -1; }
+  .card-value { font-size: 1.4rem; }
+  .filters input { min-width: 0; flex-basis: 100%; }
+  .filters select { flex: 1 1 40%; }
+  .section-head { flex-direction: column; align-items: flex-start; }
+  table { font-size: 0.82rem; }
+  th, td { padding: 8px 10px; }
+  .settings-card { padding: 14px; }
+}

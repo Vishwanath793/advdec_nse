@@ -6,7 +6,6 @@
  * this proxy performs the checksum + token exchange server-side.
  */
 import express from 'express';
-import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -15,6 +14,7 @@ import dotenv from 'dotenv';
 import { createTvService } from './tv/service.js';
 import { createPriceBandService } from './priceBands.js';
 import { createMarketContextService } from './marketContext.js';
+import { createKiteClient, KiteError } from '../src/core/kite.js';
 import cron from 'node-cron';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)), quiet: true });
@@ -133,157 +133,23 @@ app.delete('/api/master-stock', (_req, res) => {
   res.status(204).end();
 });
 
-app.post('/api/kite/session', async (req, res) => {
-  const { apiKey, apiSecret, requestToken } = req.body ?? {};
-  if (!apiKey || !apiSecret || !requestToken) {
-    return res.status(400).json({ error: 'apiKey, apiSecret and requestToken are required' });
+// Kite Connect proxy (logic shared with the Android app in src/core/kite.js).
+const kite = createKiteClient();
+const kiteRoute = (required, run) => async (req, res) => {
+  const body = req.body ?? {};
+  if (required.some((k) => !body[k])) {
+    return res.status(400).json({ error: `${required.join(', ')} ${required.length > 1 ? 'are' : 'is'} required` });
   }
-
-  const checksum = crypto
-    .createHash('sha256')
-    .update(apiKey + requestToken + apiSecret)
-    .digest('hex');
-
-  try {
-    const kiteRes = await fetch('https://api.kite.trade/session/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Kite-Version': '3' },
-      body: new URLSearchParams({
-        api_key: apiKey,
-        request_token: requestToken,
-        checksum,
-      }),
-    });
-    const data = await kiteRes.json();
-    if (!kiteRes.ok) {
-      return res.status(kiteRes.status).json({ error: data.message || 'Kite session failed', data });
-    }
-    return res.json({ session: data.data });
-  } catch (e) {
+  try { return res.json(await run(body)); }
+  catch (e) {
+    if (e instanceof KiteError) return res.status(e.status).json({ error: e.message, data: e.data });
     return res.status(502).json({ error: `Could not reach Kite: ${e.message}` });
   }
-});
-
-app.post('/api/kite/positions', async (req, res) => {
-  const { apiKey, accessToken } = req.body ?? {};
-  if (!apiKey || !accessToken) {
-    return res.status(400).json({ error: 'apiKey and accessToken are required' });
-  }
-
-  try {
-    const kiteRes = await fetch('https://api.kite.trade/portfolio/positions', {
-      method: 'GET',
-      headers: {
-        'X-Kite-Version': '3',
-        Authorization: `token ${apiKey}:${accessToken}`,
-      },
-    });
-
-    const payload = await kiteRes.json().catch(() => ({}));
-    if (!kiteRes.ok) {
-      return res.status(kiteRes.status).json({
-        error: payload.message || 'Kite positions request failed',
-        data: payload,
-      });
-    }
-
-    return res.json({ positions: Array.isArray(payload.data) ? payload.data : [] });
-  } catch (e) {
-    return res.status(502).json({ error: `Could not reach Kite: ${e.message}` });
-  }
-});
-
-app.post('/api/kite/account-summary', async (req, res) => {
-  const { apiKey, accessToken } = req.body ?? {};
-  if (!apiKey || !accessToken) {
-    return res.status(400).json({ error: 'apiKey and accessToken are required' });
-  }
-
-  try {
-    const kiteRes = await fetch('https://api.kite.trade/margins/equity', {
-      method: 'GET',
-      headers: {
-        'X-Kite-Version': '3',
-        Authorization: `token ${apiKey}:${accessToken}`,
-      },
-    });
-
-    const payload = await kiteRes.json().catch(() => ({}));
-    if (!kiteRes.ok) {
-      return res.status(kiteRes.status).json({
-        error: payload.message || 'Kite account summary failed',
-        data: payload,
-      });
-    }
-
-    const data = payload.data?.equity ?? payload.data ?? {};
-    const availableCash = Number(data.availablecash ?? data.available_cash ?? data.available ?? 0);
-    const net = Number(data.net ?? data.equity ?? 0);
-    const utilized = Number(data.utilizeddebits ?? data.utilized_margin ?? data.utilizeddebit ?? 0);
-    const accountValue = Math.max(net + utilized, availableCash, 0);
-    const intradayLeverage = availableCash > 0 ? accountValue / Math.max(availableCash, 1) : 0;
-
-    return res.json({
-      account: {
-        availableCash,
-        net,
-        utilized,
-        accountValue,
-        intradayLeverage,
-      },
-    });
-  } catch (e) {
-    return res.status(502).json({ error: `Could not reach Kite: ${e.message}` });
-  }
-});
-
-app.post('/api/kite/order', async (req, res) => {
-  const { apiKey, accessToken, order } = req.body ?? {};
-  if (!apiKey || !accessToken || !order) {
-    return res.status(400).json({ error: 'apiKey, accessToken and order are required' });
-  }
-
-  try {
-    const form = new URLSearchParams({
-      variety: order.variety ?? 'regular',
-      exchange: order.exchange,
-      tradingsymbol: order.tradingsymbol,
-      transaction_type: order.transaction_type,
-      quantity: String(order.quantity ?? 0),
-      product: order.product ?? 'MIS',
-      order_type: order.order_type ?? 'MARKET',
-      validity: order.validity ?? 'DAY',
-      ...(order.price !== undefined ? { price: String(order.price) } : {}),
-      ...(order.trigger_price !== undefined ? { trigger_price: String(order.trigger_price) } : {}),
-      ...(order.disclosed_quantity !== undefined ? { disclosed_quantity: String(order.disclosed_quantity) } : {}),
-      ...(order.market_protection !== undefined ? { market_protection: String(order.market_protection) } : {}),
-      ...(order.autoslice !== undefined ? { autoslice: String(!!order.autoslice) } : {}),
-      ...(order.tag ? { tag: order.tag } : {}),
-    });
-
-    const kiteRes = await fetch('https://api.kite.trade/orders/regular', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'X-Kite-Version': '3',
-        Authorization: `token ${apiKey}:${accessToken}`,
-      },
-      body: form,
-    });
-
-    const payload = await kiteRes.json().catch(() => ({}));
-    if (!kiteRes.ok) {
-      return res.status(kiteRes.status).json({
-        error: payload.message || 'Kite order failed',
-        data: payload,
-      });
-    }
-
-    return res.json({ order: payload.data ?? payload });
-  } catch (e) {
-    return res.status(502).json({ error: `Could not reach Kite: ${e.message}` });
-  }
-});
+};
+app.post('/api/kite/session', kiteRoute(['apiKey', 'apiSecret', 'requestToken'], async (b) => ({ session: await kite.createSession(b) })));
+app.post('/api/kite/positions', kiteRoute(['apiKey', 'accessToken'], async (b) => ({ positions: await kite.positions(b) })));
+app.post('/api/kite/account-summary', kiteRoute(['apiKey', 'accessToken'], async (b) => ({ account: await kite.accountSummary(b) })));
+app.post('/api/kite/order', kiteRoute(['apiKey', 'accessToken', 'order'], async (b) => ({ order: await kite.placeOrder(b) })));
 
 app.use(express.static(fileURLToPath(new URL('../dist', import.meta.url))));
 const PORT = process.env.PORT || 3001;

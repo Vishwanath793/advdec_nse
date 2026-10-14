@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Advance Decline</string>
+    <string name="title_activity_main">Advance Decline</string>
+    <string name="package_name">com.vishwanath793.advdec</string>
+    <string name="custom_url_scheme">com.vishwanath793.advdec</string>
+</resources>

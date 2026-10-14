@@ -1,0 +1,17 @@
+{
+  "appId": "com.vishwanath793.advdec",
+  "appName": "Advance Decline",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": ["kite.zerodha.com", "*.zerodha.com"]
+  },
+  "android": {
+    "backgroundColor": "#0f1420"
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "iconColor": "#4f7cff"
+    }
+  }
+}

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "test": "node --test server/preopen.test.js server/priceBands.test.js server/conviction.test.js server/tradeability.test.js server/marketContext.test.js server/tv/tv.test.js",
+    "test": "node --test server/preopen.test.js server/priceBands.test.js server/conviction.test.js server/tradeability.test.js server/marketContext.test.js server/kite.test.js server/phonePreopen.test.js server/tv/tv.test.js",
     "dev": "vite",
     "server": "node server/index.js",
     "dev:all": "(npm run server &) && npm run dev",
@@ -14,9 +14,15 @@
     "start": "node server/index.js",
     "tv:browser": "playwright install chromium",
     "tv:check": "node server/tv/check-downloads.js",
-    "tv:setup-browser": "node server/tv/setup-browser.js"
+    "tv:setup-browser": "node server/tv/setup-browser.js",
+    "android:sync": "npm run build && npx cap sync android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/filesystem": "^8.1.4",
+    "@capacitor/local-notifications": "^8.3.1",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "fflate": "^0.8.3",
@@ -29,6 +35,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.3",
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^5.4.11"
   }

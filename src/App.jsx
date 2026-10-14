@@ -5,6 +5,8 @@ import { parseMasterFile } from './utils/master.js';
 import { CONVICTION_FACTORS, DEFAULT_FACTOR_SETTINGS, factorWeights, MIN_GAP_PCT } from './utils/conviction.js';
 import { isTradeable, roomToCircuit, MIN_ROOM_PCT } from './utils/tradeability.js';
 import { HIGH_RVOL_X } from './utils/signals.js';
+import { api } from './platform/index.js';
+import { kiteLoginUrl } from './core/kite.js';
 import SettingsPage from './SettingsPage.jsx';
 import TvResearchPage from './TvResearchPage.jsx';
 import { formatIST } from './NseScheduleSettings.jsx';
@@ -28,7 +30,7 @@ const STOCK_COLUMNS = [
 export default function App() {
   const [page, setPage] = useState(() => {
     const hash = window.location.hash;
-    if (hash === '#/tv-research') return 'tv-research';
+    if (hash === '#/tv-research' && api.features.tvResearch) return 'tv-research';
     if (hash === '#/settings') return 'settings';
     if (hash === '#/positions') return 'positions';
     return 'analyze';
@@ -89,8 +91,7 @@ export default function App() {
 
   // Load the uploaded master list if one was saved, else the bundled CSV.
   useEffect(() => {
-    fetch('/api/master-stock')
-      .then((r) => (r.ok ? r.json() : null))
+    api.master.get()
       .catch(() => null)
       .then((saved) => {
         if (saved?.rows?.length) {
@@ -107,13 +108,7 @@ export default function App() {
     setMasterStatus({ type: 'info', message: `Reading ${file.name}…` });
     try {
       const rows = await parseMasterFile(file);
-      const r = await fetch('/api/master-stock', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: file.name, rows }),
-      });
-      const saved = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(saved.error || `HTTP ${r.status}`);
+      const saved = await api.master.save(file.name, rows);
       setMasterRows(saved.rows);
       setMasterSource({ name: saved.name, uploadedAt: saved.uploadedAt });
       setMasterError(null);
@@ -123,14 +118,12 @@ export default function App() {
     }
   };
 
-  // Manual NSE pre-open fetch (same backend job as the scheduled 09:10 IST run).
+  // Manual NSE pre-open fetch (same job as the scheduled 09:10 IST run).
   const handleNseFetchNow = async () => {
     setNseFetching(true);
     setNseFetchStatus(null);
     try {
-      const r = await fetch('/api/nse/preopen/refresh', { method: 'POST' });
-      const payload = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+      const payload = await api.preopen.refresh();
       setNseData((current) => ({ ...current, ...payload }));
       setNseConnectionError(null);
       setNseFetchStatus({
@@ -147,8 +140,7 @@ export default function App() {
   const handleMasterReset = async () => {
     if (!window.confirm('Remove the uploaded master list and go back to the bundled master_stock.csv?')) return;
     try {
-      const r = await fetch('/api/master-stock', { method: 'DELETE' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await api.master.reset();
       await loadBundledMaster();
       setMasterStatus({ type: 'info', message: 'Reverted to the bundled master_stock.csv.' });
     } catch (e) {
@@ -157,14 +149,12 @@ export default function App() {
   };
 
   // Yesterday's range, average volume and today's corporate events. Reloaded with
-  // each new NSE snapshot; the backend caches and refreshes events every 10 minutes.
+  // each new NSE snapshot; events are cached and refreshed at most every 10 minutes.
   const snapshotFetchedAt = nseData?.snapshot?.fetchedAt;
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/nse/context')
-      .then(async (r) => {
-        const payload = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+    api.context.get()
+      .then((payload) => {
         if (cancelled) return;
         setMarketContext(payload);
         setMarketContextError(payload.error ?? null);
@@ -173,12 +163,10 @@ export default function App() {
     return () => { cancelled = true; };
   }, [snapshotFetchedAt]);
 
-  // NSE price bands (circuit %), refreshed by the backend once per IST day.
+  // NSE price bands (circuit %), refreshed once per IST day.
   useEffect(() => {
-    fetch('/api/nse/price-bands')
-      .then(async (r) => {
-        const payload = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+    api.priceBands.get()
+      .then((payload) => {
         setPriceBands(payload);
         setPriceBandError(payload.lastError ?? null);
       })
@@ -193,24 +181,14 @@ export default function App() {
     [pmRows, masterRows, priceBands, settings.convictionFactors, marketContext]
   );
 
-  useEffect(() => {
-    let events;
-    // Defer connection until after React StrictMode's setup/cleanup check.
-    const startup = setTimeout(() => {
-      events = new EventSource('/api/nse/preopen/events');
-      events.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          setNseData((current) => ({ ...current, ...data }));
-          setNseConnectionError(null);
-        } catch {
-          setNseConnectionError('Could not read the NSE update. Reload the page to reconnect.');
-        }
-      };
-      events.onerror = () => setNseConnectionError('NSE updates disconnected. Reconnecting to the backend…');
-    }, 0);
-    return () => { clearTimeout(startup); events?.close(); };
-  }, []);
+  // NSE pre-open status and snapshots (backend events on the web; on the phone, local).
+  useEffect(() => api.preopen.subscribe(
+    (data) => {
+      setNseData((current) => ({ ...current, ...data }));
+      setNseConnectionError(null);
+    },
+    (message) => setNseConnectionError(message),
+  ), []);
 
   useEffect(() => {
     const snapshot = nseData?.snapshot;
@@ -230,7 +208,7 @@ export default function App() {
     const onHash = () => {
       const hash = window.location.hash;
       if (hash === '#/settings') setPage('settings');
-      else if (hash === '#/tv-research') setPage('tv-research');
+      else if (hash === '#/tv-research' && api.features.tvResearch) setPage('tv-research');
       else if (hash === '#/positions') setPage('positions');
       else setPage('analyze');
     };
@@ -247,21 +225,8 @@ export default function App() {
     setAccountSummaryLoading(true);
     setAccountSummaryError(null);
 
-    fetch('/api/kite/account-summary', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiKey: settings.kiteApiKey,
-        accessToken: session.access_token,
-      }),
-    })
-      .then(async (r) => {
-        const payload = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          throw new Error(payload.error || payload.message || 'Could not load account summary');
-        }
-        setAccountSummary(payload.account ?? null);
-      })
+    api.kite.accountSummary({ apiKey: settings.kiteApiKey, accessToken: session.access_token })
+      .then((account) => setAccountSummary(account ?? null))
       .catch((e) => {
         setAccountSummary(null);
         setAccountSummaryError(e.message || 'Could not load account summary');
@@ -278,22 +243,8 @@ export default function App() {
     setPositionsLoading(true);
     setPositionsError(null);
 
-    fetch('/api/kite/positions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiKey: settings.kiteApiKey,
-        accessToken: session.access_token,
-      }),
-    })
-      .then(async (r) => {
-        const payload = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          throw new Error(payload.error || payload.message || 'Could not load positions');
-        }
-        const data = Array.isArray(payload.positions) ? payload.positions : [];
-        setPositions(data);
-      })
+    api.kite.positions({ apiKey: settings.kiteApiKey, accessToken: session.access_token })
+      .then((data) => setPositions(Array.isArray(data) ? data : []))
       .catch((e) => {
         setPositions([]);
         setPositionsError(e.message || 'Could not load positions');
@@ -321,21 +272,9 @@ export default function App() {
     }
 
     setKiteStatus({ type: 'info', message: 'Exchanging request token…' });
-    fetch('/api/kite/session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiKey: settings.kiteApiKey,
-        apiSecret: settings.kiteApiSecret,
-        requestToken,
-      }),
-    })
-      .then(async (r) => {
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error || 'Token exchange failed');
-        return data.session;
-      })
+    api.kite.createSession({ apiKey: settings.kiteApiKey, apiSecret: settings.kiteApiSecret, requestToken })
       .then((s) => {
+        if (!s?.access_token) throw new Error('Token exchange failed');
         setSession(s);
         saveSession(s);
         setKiteStatus({ type: 'info', message: `Connected as ${s.user_name || s.user_id}.` });
@@ -351,7 +290,7 @@ export default function App() {
   };
 
   const handleKiteLogin = (s) => {
-    window.location.href = `https://kite.zerodha.com/connect/login?v=3&api_key=${encodeURIComponent(s.kiteApiKey)}`;
+    window.location.href = kiteLoginUrl(s.kiteApiKey);
   };
 
   const handleKiteLogout = () => {
@@ -677,20 +616,8 @@ export default function App() {
       return;
     }
 
-    fetch('/api/kite/order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiKey: settings.kiteApiKey,
-        accessToken: session.access_token,
-        order: params,
-      }),
-    })
-      .then(async (r) => {
-        const payload = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          throw new Error(payload.error || payload.message || 'Order failed');
-        }
+    api.kite.placeOrder({ apiKey: settings.kiteApiKey, accessToken: session.access_token, order: params })
+      .then(() => {
         window.alert(`Order placed successfully.\n${lines}`);
       })
       .catch((e) => {
@@ -704,21 +631,7 @@ export default function App() {
       return Promise.reject(new Error('Kite session missing'));
     }
 
-    return fetch('/api/kite/order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiKey: settings.kiteApiKey,
-        accessToken: session.access_token,
-        order: params,
-      }),
-    }).then(async (r) => {
-      const payload = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        throw new Error(payload.error || payload.message || 'Order failed');
-      }
-      return payload;
-    });
+    return api.kite.placeOrder({ apiKey: settings.kiteApiKey, accessToken: session.access_token, order: params });
   };
 
   const handleSquareOffPosition = (position) => {
@@ -841,7 +754,9 @@ export default function App() {
         <a href="#/positions" className={`nav-link ${page === 'positions' ? 'active' : ''}`}>
           Positions
         </a>
-        <a href="#/tv-research" className={`nav-link ${page === 'tv-research' ? 'active' : ''}`}>TV research</a>
+        {api.features.tvResearch && (
+          <a href="#/tv-research" className={`nav-link ${page === 'tv-research' ? 'active' : ''}`}>TV research</a>
+        )}
         <a href="#/settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`}>
           Settings
         </a>

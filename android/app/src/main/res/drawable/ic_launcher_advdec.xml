@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground: advance (green) and decline (red) bars on the app's dark theme. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Baseline -->
+    <path android:fillColor="#8B95AD" android:pathData="M30,72h48v2.5h-48z" />
+    <!-- Advance bars -->
+    <path android:fillColor="#22C55E" android:pathData="M33,52h8v20h-8z" />
+    <path android:fillColor="#22C55E" android:pathData="M45,40h8v32h-8z" />
+    <!-- Decline bars (below the baseline) -->
+    <path android:fillColor="#EF4444" android:pathData="M57,74.5h8v10h-8z" />
+    <path android:fillColor="#EF4444" android:pathData="M69,74.5h8v5h-8z" />
+    <!-- Up arrow over the advances -->
+    <path android:fillColor="#4F7CFF" android:pathData="M49,26l9,9h-6v3h-6v-3h-6z" />
+</vector>

@@ -54,3 +54,13 @@ For the current date, Saturday 12 September 2026, the next eligible run is **Tue
 - Stop Windows auto-start with `Disable-ScheduledTask -TaskName AdvanceDecline-Backend`; `Stop-ScheduledTask -TaskName AdvanceDecline-Backend` stops its running process. Pausing research from the UI keeps the existing pre-open service available.
 
 Implementation references: [OpenAI conversation state](https://developers.openai.com/api/docs/guides/conversation-state), [GPT-4.1 model](https://developers.openai.com/api/docs/models/gpt-4.1), [Playwright downloads](https://playwright.dev/docs/downloads). Prompt constants are in `server/tv/prompts.js`.
+
+## Android app
+
+A standalone Android version (everything except TV research runs on the phone, no PC needed) lives in
+`android/`, built with Capacitor. GitHub Actions builds the APK on every push; builds from `main` are published
+as the **android-latest** release. Install steps, the phone's 09:10 notification schedule and Kite setup are in
+[android/README.md](android/README.md).
+
+Shared logic (NSE parsing, price bands, signals, Kite calls, calendar) is in `src/core/` and used by both the
+Node backend and the app; `src/platform/` picks the backend (browser) or on-device (Android) implementation.

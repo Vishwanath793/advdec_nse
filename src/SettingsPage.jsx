@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import NseScheduleSettings from './NseScheduleSettings.jsx';
+import { isNativeApp } from './platform/index.js';
 
 export default function SettingsPage({
   settings,
@@ -36,6 +37,7 @@ export default function SettingsPage({
         <p className="hint">
           Create an app at <a href="https://kite.trade" target="_blank" rel="noreferrer">kite.trade</a> and
           set its redirect URL to <code>{window.location.origin}/kite/callback</code>.
+          {isNativeApp && ' A Kite app has one redirect URL, so use a separate Kite app for the phone if the desktop version also logs in. The API secret is stored only on this phone.'}
         </p>
 
         <label className="field">
