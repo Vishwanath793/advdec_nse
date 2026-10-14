@@ -47,8 +47,7 @@ jobs:
           set -o pipefail
           if ! ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee gradle.log; then
             # Surface Gradle's error summary as a public annotation (job logs need a login).
-            summary=$(grep -E -A12 "What went wrong|error:|FAILURE:" gradle.log | head -60 | sed ':a;N;$!ba;s/%/%25/g;s///g;s/
-/%0A/g')
+            summary=$(grep -E -A12 "What went wrong|error:|FAILURE:" gradle.log | head -60 | awk '{ gsub(/%/, "%25"); printf "%s%%0A", $0 }')
             echo "::error title=Gradle build failed::${summary:-see job log}"
             exit 1
           fi
