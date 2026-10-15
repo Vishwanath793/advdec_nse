@@ -1,4 +1,4 @@
-import { DEFAULT_FACTOR_SETTINGS } from './utils/conviction.js';
+import { DEFAULT_FACTOR_SETTINGS, FACTOR_DEFAULTS_VERSION, migrateFactorSettings } from './utils/conviction.js';
 
 const SETTINGS_KEY = 'ad_settings_v1';
 const SESSION_KEY = 'ad_kite_session_v1';
@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS = {
   moversRankBy: 'pctChange', // top gainers/losers ranking: 'pctChange' | 'conviction'
   tradeableOnly: true,       // top gainers/losers: hide T2T series and circuit-locked stocks
   convictionFactors: DEFAULT_FACTOR_SETTINGS, // { key: { on, weight } } for the conviction score
+  convictionFactorsVersion: FACTOR_DEFAULTS_VERSION, // which default weights convictionFactors started from
   maxResults: 50,
 };
 
@@ -50,6 +51,8 @@ export function loadSettings() {
         }
       }
     }
+    merged.convictionFactors = migrateFactorSettings(parsed.convictionFactors, parsed.convictionFactorsVersion);
+    merged.convictionFactorsVersion = FACTOR_DEFAULTS_VERSION;
     return merged;
   } catch {
     return { ...DEFAULT_SETTINGS };

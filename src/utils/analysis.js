@@ -24,6 +24,26 @@ export function tickSize(price) {
  * NSE rounds the upper limit down and the lower limit up to the tick size,
  * e.g. base 599.90 at 20% -> 479.95 / 719.85.
  */
+/** Final price may differ from base + change by at most this % before the row is flagged. */
+export const DATA_TOLERANCE_PCT = 0.05;
+
+/**
+ * NSE pre-open rows occasionally contradict themselves, e.g. on 15 Oct 2026
+ * NSLNISP showed final ₹39.68 on base ₹39.63 with change +2.37 (+5.98%), and
+ * NEULANDLAB final ₹20,200 = base with change +150. Such rows (both had ₹0
+ * pre-open value: no trades) give a gap the price doesn't support. Returns a
+ * description of the mismatch, or null when consistent or not checkable.
+ */
+export function dataIssue({ base, change, finalPrice, valueCr }) {
+  if (!(base > 0) || !(finalPrice > 0) || change == null) return null;
+  const expected = base + change;
+  const offPct = (Math.abs(finalPrice - expected) / base) * 100;
+  if (offPct <= DATA_TOLERANCE_PCT) return null;
+  const rs = (n) => `₹${n.toFixed(2)}`;
+  return `Final price ${rs(finalPrice)} but base ${rs(base)} ${change >= 0 ? '+' : '−'} change ${Math.abs(change).toFixed(2)} = ${rs(expected)}`
+    + `${valueCr === 0 ? '; ₹0 traded in pre-open' : ''}. The gap may not be real: check the live price before trading.`;
+}
+
 export function circuitFor(band, basePrice, finalPrice) {
   if (typeof band !== 'number' || basePrice == null) return { upperCircuit: null, lowerCircuit: null, circuitHit: null };
   // Work in paise to avoid floating-point drift.
@@ -91,7 +111,8 @@ export function analyze(pmRows, masterRows, secList = null, options = {}) {
     const finalPrice = toNumber(row['FINAL PRICE']);
     // NSE's base price differs from prev close after corporate actions; CSV uploads lack it.
     const basePrice = toNumber(row['BASE PRICE']);
-    const circuitBase = !Number.isNaN(basePrice) ? basePrice : Number.isNaN(prevClose) ? null : prevClose;
+    // A base of 0 (seen for ADROITIND on 15 Oct 2026) is missing data, not a price.
+    const circuitBase = basePrice > 0 ? basePrice : prevClose > 0 ? prevClose : null;
     const ffmCap = toNumber(row['FFM CAP (₹ Crores)']);
     const valueCr = toNumber(row['VALUE (₹ Crores)']);
 
@@ -137,6 +158,12 @@ export function analyze(pmRows, masterRows, secList = null, options = {}) {
       // Pre-open data carries the session's series; uploads fall back to the NSE list.
       series: String(row['SERIES'] ?? '').trim() || info[symbol]?.series || null,
       surveillance: info[symbol]?.remarks || null,
+      dataIssue: dataIssue({
+        base: circuitBase,
+        change: Number.isNaN(change) ? null : change,
+        finalPrice: Number.isNaN(finalPrice) ? null : finalPrice,
+        valueCr: Number.isNaN(valueCr) ? null : valueCr,
+      }),
       status,
     });
   }

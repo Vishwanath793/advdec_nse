@@ -9,17 +9,36 @@
  * This ranks setups; it does not predict outcomes.
  */
 
+/*
+ * Default weights (version 2): equal ("unit") weights on the factors that held
+ * up in measured outcomes, which is the robust choice while there are only a
+ * few days of data: fitted weights mostly fit that data's noise, and unit
+ * weights are known to predict about as well out of sample (Dawes 1979).
+ *
+ * Evidence, 14–15 Oct 2026 (Spearman of each factor vs the open-to-close move in
+ * the gap direction, ~100 gap-ups and ~100 gap-downs a day): pre-open value
+ * helped in all four day/direction groups, sector in three, gap size once it
+ * was scored as an inverted U. Buy/sell orders looked flat alone but ranking
+ * without it was clearly worse on 15 Oct, so it stays. 52-week breakout and
+ * gap vs yesterday's range correlated negatively: off. Results catalyst and
+ * relative volume were mixed and added nothing on top: off until the report
+ * card shows otherwise. On 15 Oct, unit weights on the five core factors
+ * ranked gap-ups at ρ 0.25 and gap-downs at 0.22, against 0.18/0.19 for
+ * weights fitted to the single-factor correlations.
+ *
+ * Every factor defaults to the same weight, so "Check all" means equal weights.
+ * Re-derive as more days are recorded.
+ */
 export const CONVICTION_FACTORS = [
-  { key: 'gap', label: 'Gap size', weight: 20, help: 'Bigger gap scores higher (full marks at 3%).' },
+  { key: 'gap', label: 'Gap size', weight: 20, help: 'Moderate gaps score best: full marks for 0.75–2% gap-ups and 0.75–3% gap-downs; bigger gaps taper because they tend to fade.' },
   { key: 'sector', label: 'Sector strength', weight: 20, help: "Sector's average gap vs other sectors, plus peers gapping 1%+ the same way." },
   { key: 'orders', label: 'Buy/sell orders', weight: 20, help: 'Share of pending pre-open orders on the gap side (counts ¼ for F&O stocks).' },
-  { key: 'market', label: 'Market A/D agrees', weight: 15, help: 'Share of all stocks moving in the gap direction.' },
-  { key: 'range', label: '52-week breakout', weight: 15, help: 'Full marks when opening through the 52-week high (or low); otherwise neutral.' },
-  { key: 'value', label: 'Pre-open value', weight: 10, help: 'Pre-open traded value compared with other stocks.' },
-  // Off by default until tested over more days; turn on in "Conviction factors".
-  { key: 'catalyst', label: 'Results catalyst', weight: 15, defaultOn: false, help: 'Results announced since the last close score full marks; an ex-date today scores zero (the gap may be a price adjustment).' },
-  { key: 'rvol', label: 'Relative volume', weight: 15, defaultOn: false, help: 'Pre-open quantity vs its 20-day average daily volume, ranked against other stocks.' },
-  { key: 'prevRange', label: "Gap vs yesterday's range", weight: 15, defaultOn: false, help: "Full marks when opening beyond yesterday's high (gap-up) or low (gap-down); otherwise neutral." },
+  { key: 'market', label: 'Market A/D agrees', weight: 20, help: 'Share of all stocks moving in the gap direction.' },
+  { key: 'range', label: '52-week breakout', weight: 20, defaultOn: false, help: 'Full marks when opening through the 52-week high (or low); otherwise neutral.' },
+  { key: 'value', label: 'Pre-open value', weight: 20, help: 'Pre-open traded value compared with other stocks.' },
+  { key: 'catalyst', label: 'Results catalyst', weight: 20, defaultOn: false, help: 'Results announced since the last close score full marks; an ex-date today scores zero (the gap may be a price adjustment).' },
+  { key: 'rvol', label: 'Relative volume', weight: 20, defaultOn: false, help: 'Pre-open quantity vs its 20-day average daily volume, ranked against other stocks.' },
+  { key: 'prevRange', label: "Gap vs yesterday's range", weight: 20, defaultOn: false, help: "Full marks when opening beyond yesterday's high (gap-up) or low (gap-down); otherwise neutral." },
 ];
 
 /** Default per-factor settings: { key: { on, weight } }. */
@@ -27,20 +46,106 @@ export const DEFAULT_FACTOR_SETTINGS = Object.fromEntries(
   CONVICTION_FACTORS.map((f) => [f.key, { on: f.defaultOn ?? true, weight: f.weight }])
 );
 
+/** Bump when the default weights change, so users who never customised get the new ones. */
+export const FACTOR_DEFAULTS_VERSION = 2;
+
+/** Earlier default sets ({ key: [on, weight] }); saved settings equal to one of these were never customised. */
+const LEGACY_DEFAULTS = [
+  { gap: [true, 20], sector: [true, 20], orders: [true, 20], market: [true, 15], range: [true, 15], value: [true, 10],
+    catalyst: [false, 15], rvol: [false, 15], prevRange: [false, 15] },
+];
+
 /**
- * Effective weight per factor from user settings (missing keys fall back to the
- * defaults, so factors added later still appear). Off or 0 means excluded.
+ * Conviction factor settings to use after loading saved settings: saved
+ * settings from an older version that still equal that version's defaults are
+ * replaced with the current defaults; customised ones are kept as they are.
+ */
+export function migrateFactorSettings(saved, savedVersion) {
+  if (!saved || typeof saved !== 'object') return DEFAULT_FACTOR_SETTINGS;
+  if (savedVersion === FACTOR_DEFAULTS_VERSION) return saved;
+  const untouched = LEGACY_DEFAULTS.some((legacy) => Object.entries(legacy).every(([key, [on, weight]]) => {
+    const s = saved[key];
+    // Keys added after the settings were saved are missing, which is fine.
+    return s == null || (s.on === on && Number(s.weight) === weight);
+  }));
+  return untouched ? DEFAULT_FACTOR_SETTINGS : saved;
+}
+
+/** Largest weight a factor can have (the UI's slider and number box use the same range). */
+export const MAX_FACTOR_WEIGHT = 100;
+
+/**
+ * A usable weight, or null. Rejects null/blank/NaN (JSON turns NaN into null,
+ * and Number(null) is 0, which would silently switch a factor off) and clamps
+ * to 0..MAX_FACTOR_WEIGHT.
+ */
+export function cleanWeight(value) {
+  if (value == null || (typeof value === 'string' && !value.trim()) || typeof value === 'boolean') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(MAX_FACTOR_WEIGHT, Math.max(0, n));
+}
+
+/**
+ * Effective weight per factor from user settings (missing keys or unusable
+ * values fall back to the defaults, so factors added later still appear).
+ * Off or 0 means excluded.
  */
 export function factorWeights(settings) {
   return Object.fromEntries(CONVICTION_FACTORS.map((f) => {
     const s = settings?.[f.key];
-    const weight = Number.isFinite(Number(s?.weight)) ? Math.max(0, Number(s.weight)) : f.weight;
-    return [f.key, (s?.on ?? f.defaultOn ?? true) ? weight : 0];
+    const on = typeof s?.on === 'boolean' ? s.on : (f.defaultOn ?? true);
+    return [f.key, on ? cleanWeight(s?.weight) ?? f.weight : 0];
   }));
 }
 
-/** A gap of this size (%) or more earns the full gap score. */
-export const FULL_GAP_PCT = 3;
+/**
+ * Whole-number shares (%) of the active weights that add up to exactly 100
+ * (largest-remainder rounding; plain rounding can give 99 or 101).
+ */
+export function weightShares(weights) {
+  const entries = Object.entries(weights).filter(([, w]) => w > 0);
+  const total = entries.reduce((sum, [, w]) => sum + w, 0);
+  const shares = Object.fromEntries(Object.keys(weights).map((k) => [k, 0]));
+  if (!total) return shares;
+  const raw = entries.map(([k, w]) => ({ k, exact: (w / total) * 100 }));
+  raw.forEach((r) => { shares[r.k] = Math.floor(r.exact); });
+  let left = 100 - raw.reduce((sum, r) => sum + shares[r.k], 0);
+  for (const r of [...raw].sort((a, b) => (b.exact % 1) - (a.exact % 1))) {
+    if (left-- <= 0) break;
+    shares[r.k]++;
+  }
+  return shares;
+}
+
+/**
+ * Gap-size sweet spot (%), by direction. Measured on 14–15 Oct 2026 (NSE open
+ * vs close, ~200 gappers a day): big gap-ups faded (15 Oct: 2%+ gap-ups
+ * continued 17% of the time, avg −4%), while gap-downs held up to ~3% (2–3%
+ * gap-downs continued 90%) and faded beyond. Scoring: 0.6 at the 0.5% minimum,
+ * rising to full marks at FULL_FROM, full up to FULL_TO, falling to 0.3 at
+ * FULL_TO + 2 and to 0.1 at FULL_TO + 6 and beyond.
+ */
+export const GAP_SWEET_SPOT = { up: [0.75, 2], down: [0.75, 3] };
+
+const lerp = (x, x0, x1, y0, y1) => y0 + (y1 - y0) * Math.min(1, Math.max(0, (x - x0) / (x1 - x0)));
+
+/** Gap factor value (0..1) for an absolute gap % in a direction (+1 up, -1 down). */
+export function gapScore(gap, dir) {
+  const [from, to] = GAP_SWEET_SPOT[dir > 0 ? 'up' : 'down'];
+  if (gap < from) return lerp(gap, MIN_GAP_PCT, from, 0.6, 1);
+  if (gap <= to) return 1;
+  if (gap <= to + 2) return lerp(gap, to, to + 2, 1, 0.3);
+  return lerp(gap, to + 2, to + 6, 0.3, 0.1);
+}
+
+/**
+ * Stocks that can't be traded intraday (trade-to-trade series, or locked at a
+ * circuit) have their score capped here. They often gap the most and looked
+ * best on paper, then reversed (THELEELA 15 Oct 2026: locked at UC, scored 85,
+ * closed −9.4% from the open).
+ */
+export const BLOCKED_SCORE_CAP = 30;
 
 /** Gaps smaller than this (%) are not gap trades and get no score. */
 export const MIN_GAP_PCT = 0.5;
@@ -110,7 +215,13 @@ function factorScores(stock, dir, ctx) {
   const out = {};
 
   const gap = Math.abs(stock.pctChange ?? 0);
-  out.gap = { value: clamp01(gap / FULL_GAP_PCT), detail: `${gap.toFixed(2)}% gap (full marks at ${FULL_GAP_PCT}%)` };
+  const [from, to] = GAP_SWEET_SPOT[up ? 'up' : 'down'];
+  out.gap = {
+    value: gapScore(gap, dir),
+    detail: `${gap.toFixed(2)}% gap: ${
+      gap < from ? 'small' : gap <= to ? 'sweet spot' : `large gap-${up ? 'ups' : 'downs'} often fade`
+    } (full marks ${from}–${to}%)`,
+  };
 
   const sector = ctx.sectorStrength.get(stock.sector);
   if (sector) {
@@ -206,7 +317,8 @@ export function scoreConviction(stocks, sectors, summary, factorSettings = null)
 
   for (const stock of stocks) {
     const dir = stock.status === 'advance' ? 1 : stock.status === 'decline' ? -1 : 0;
-    if (!dir || Math.abs(stock.pctChange ?? 0) < MIN_GAP_PCT) {
+    // Inconsistent pre-open data (see analysis.js dataIssue) is not scored.
+    if (!dir || Math.abs(stock.pctChange ?? 0) < MIN_GAP_PCT || stock.dataIssue) {
       stock.conviction = null;
       stock.convictionScore = null;
       continue;
@@ -222,11 +334,16 @@ export function scoreConviction(stocks, sectors, summary, factorSettings = null)
       return factor;
     });
     const totalWeight = factors.reduce((sum, f) => sum + f.weight, 0);
-    const score = totalWeight
+    const raw = totalWeight
       ? Math.round((factors.reduce((sum, f) => sum + f.value * f.weight, 0) / totalWeight) * 100)
       : null;
+    const blocks = (stock.flags ?? []).filter((f) => f.severity === 'block');
+    const capped = raw != null && blocks.length > 0 && raw > BLOCKED_SCORE_CAP;
+    const score = capped ? BLOCKED_SCORE_CAP : raw;
     stock.conviction = {
       score,
+      rawScore: raw,
+      cappedBy: blocks.length ? blocks.map((f) => f.label) : null,
       direction: dir > 0 ? 'up' : 'down',
       factors,
       missing: CONVICTION_FACTORS.filter((f) => weights[f.key] && !scores[f.key]).map((f) => f.label),

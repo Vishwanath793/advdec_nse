@@ -2,7 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseCSV, rowsToObjects } from './utils/csv.js';
 import { analyze } from './utils/analysis.js';
 import { parseMasterFile } from './utils/master.js';
-import { CONVICTION_FACTORS, DEFAULT_FACTOR_SETTINGS, factorWeights, MIN_GAP_PCT } from './utils/conviction.js';
+import {
+  BLOCKED_SCORE_CAP,
+  cleanWeight,
+  CONVICTION_FACTORS,
+  DEFAULT_FACTOR_SETTINGS,
+  factorWeights,
+  MAX_FACTOR_WEIGHT,
+  MIN_GAP_PCT,
+  weightShares,
+} from './utils/conviction.js';
 import { isTradeable, roomToCircuit, MIN_ROOM_PCT } from './utils/tradeability.js';
 import { HIGH_RVOL_X } from './utils/signals.js';
 import { api } from './platform/index.js';
@@ -503,15 +512,30 @@ export default function App() {
   const updateMinMarketCap = (value) => updateSetting({ minMarketCapCr: Math.max(0, Number(value) || 0) });
 
   // Conviction factor on/off + weights (saved with the other settings).
-  const factorSetting = (key) => ({ ...DEFAULT_FACTOR_SETTINGS[key], ...settings.convictionFactors?.[key] });
+  // Normalised the same way as the score (factorWeights), so the panel shows what is actually used.
+  const factorSetting = (key) => {
+    const s = settings.convictionFactors?.[key];
+    const d = DEFAULT_FACTOR_SETTINGS[key];
+    return { on: typeof s?.on === 'boolean' ? s.on : d.on, weight: cleanWeight(s?.weight) ?? d.weight };
+  };
   const activeWeights = factorWeights(settings.convictionFactors);
-  const activeTotal = Object.values(activeWeights).reduce((a, b) => a + b, 0);
+  const activeShares = weightShares(activeWeights);
   const activeCount = Object.values(activeWeights).filter(Boolean).length;
+  const checkedCount = CONVICTION_FACTORS.filter((f) => factorSetting(f.key).on).length;
   const factorsCustomised = JSON.stringify(activeWeights) !== JSON.stringify(factorWeights(DEFAULT_FACTOR_SETTINGS));
+  const allFactors = (patchFor) => Object.fromEntries(CONVICTION_FACTORS.map((f) => [f.key, { ...factorSetting(f.key), ...patchFor(f) }]));
   const updateFactor = (key, patch) => updateSetting({
-    convictionFactors: { ...DEFAULT_FACTOR_SETTINGS, ...settings.convictionFactors, [key]: { ...factorSetting(key), ...patch } },
+    convictionFactors: allFactors((f) => (f.key === key ? patch : {})),
   });
-  const setFactorWeight = (key, value) => updateFactor(key, { weight: Math.min(100, Math.max(0, Math.round(Number(value) || 0))) });
+  // Turning a factor on at weight 0 would leave it ticked but ignored, so it gets its default weight back.
+  const withWeight = (f) => ({ on: true, ...(factorSetting(f.key).weight > 0 ? {} : { weight: f.weight }) });
+  const toggleFactor = (f, on) => updateFactor(f.key, on ? withWeight(f) : { on: false });
+  const toggleAllFactors = (on) => updateSetting({ convictionFactors: allFactors((f) => (on ? withWeight(f) : { on: false })) });
+  // A blank or invalid entry keeps the current weight instead of silently turning the factor off.
+  const setFactorWeight = (key, value) => {
+    const weight = cleanWeight(value);
+    if (weight != null) updateFactor(key, { weight: Math.round(weight) });
+  };
 
   // Conviction score cell; hover shows each factor's contribution.
   const renderConviction = (s) => {
@@ -523,6 +547,9 @@ export default function App() {
     const tier = c.score >= 70 ? 'high' : c.score >= 50 ? 'mid' : 'low';
     const title = [
       `Gap-${c.direction} conviction ${c.score}/100`,
+      ...(c.cappedBy && c.rawScore > c.score
+        ? [`Capped at ${BLOCKED_SCORE_CAP} from ${c.rawScore}: ${c.cappedBy.join(', ')} (can't be traded intraday)`]
+        : []),
       ...c.factors.map((f) => `• ${f.label} (weight ${f.weight}): ${Math.round(f.value * 100)} — ${f.detail}`),
       ...(c.missing.length ? [`Not available: ${c.missing.join(', ')}`] : []),
       ...(c.excluded.length ? [`Turned off: ${c.excluded.join(', ')}`] : []),
@@ -1019,8 +1046,20 @@ export default function App() {
             </summary>
             <p className="hint">
               Turn factors off or change their weight. Weights are relative: the factors that are on are rescaled to
-              100, shown as “share”. Changes apply instantly and are saved in this browser.
+              100, shown as “share”. Changes apply instantly and are saved in this browser. Defaults: equal weights on the five
+              factors that held up against 14–15 Oct outcomes.
             </p>
+            <label className="factor-toggle factor-all">
+              <input
+                type="checkbox"
+                checked={checkedCount === CONVICTION_FACTORS.length}
+                ref={(el) => {
+                  if (el) el.indeterminate = checkedCount > 0 && checkedCount < CONVICTION_FACTORS.length;
+                }}
+                onChange={(e) => toggleAllFactors(e.target.checked)}
+              />
+              <strong>{checkedCount === CONVICTION_FACTORS.length ? 'Uncheck all' : 'Check all'}</strong>
+            </label>
             <div className="factor-grid">
               {CONVICTION_FACTORS.map((f) => {
                 const s = factorSetting(f.key);
@@ -1031,16 +1070,16 @@ export default function App() {
                       <input
                         type="checkbox"
                         checked={s.on}
-                        onChange={(e) => updateFactor(f.key, { on: e.target.checked })}
+                        onChange={(e) => toggleFactor(f, e.target.checked)}
                       />
                       <strong>{f.label}</strong>
                     </label>
                     <input
                       type="range"
                       min="0"
-                      max="50"
+                      max={MAX_FACTOR_WEIGHT}
                       step="5"
-                      value={Math.min(s.weight, 50)}
+                      value={s.weight}
                       disabled={!s.on}
                       aria-label={`${f.label} weight`}
                       onChange={(e) => setFactorWeight(f.key, e.target.value)}
@@ -1049,14 +1088,14 @@ export default function App() {
                       type="number"
                       className="factor-weight"
                       min="0"
-                      max="100"
+                      max={MAX_FACTOR_WEIGHT}
                       value={s.weight}
                       disabled={!s.on}
                       aria-label={`${f.label} weight value`}
                       onChange={(e) => setFactorWeight(f.key, e.target.value)}
                     />
                     <span className="factor-share">
-                      {active ? `${Math.round((activeWeights[f.key] / activeTotal) * 100)}% share` : 'off'}
+                      {active ? `${activeShares[f.key]}% share` : s.on ? 'weight 0' : 'off'}
                     </span>
                     <span className="hint factor-help">{f.help}</span>
                   </div>
@@ -1258,8 +1297,8 @@ export default function App() {
                         {s.symbol}
                         {renderFlags(s)}
                       </td>
-                      <td>{s.company}</td>
-                      <td>{s.sector}</td>
+                      <td className="wrap-cell company-cell">{s.company}</td>
+                      <td className="wrap-cell sector-cell">{s.sector}</td>
                       <td className="num">{fmtCap(s.marketCap)}</td>
                       <td className="num">{s.prevClose ?? '—'}</td>
                       <td className="num">{s.finalPrice ?? '—'}</td>
@@ -1270,7 +1309,7 @@ export default function App() {
                         {s.pctChange ?? '—'}
                       </td>
                       <td className="num">{renderConviction(s)}</td>
-                      <td className="signals-cell">{renderSignals(s)}</td>
+                      <td className="signals-cell wrap-cell">{renderSignals(s)}</td>
                       <td className="num circuit-cell">{renderCircuit(s)}</td>
                       <td>
                         <span className={`badge ${s.status}`}>

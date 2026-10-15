@@ -26,7 +26,7 @@ export default function SettingsPage({
   const connected = !!session;
 
   return (
-    <div className="settings-page">
+    <div className="settings-page settings-grid">
       <h2>Settings</h2>
 
       <NseScheduleSettings data={nseData} connectionError={nseConnectionError} onUpdate={onNseUpdate} />

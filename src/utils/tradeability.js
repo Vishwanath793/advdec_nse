@@ -27,6 +27,10 @@ export function tradeFlags(stock) {
   const flags = [];
   const { series, surveillance, circuitHit } = stock;
 
+  if (stock.dataIssue) {
+    flags.push({ key: 'data', label: 'Data?', severity: 'warn', detail: `Inconsistent NSE pre-open data: ${stock.dataIssue}` });
+  }
+
   if (series && TRADE_TO_TRADE.has(series)) {
     flags.push({
       key: 't2t',

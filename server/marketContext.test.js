@@ -70,7 +70,7 @@ test('signals feed the analysis: flags, badges data and optional conviction fact
   assert.deepEqual([factor(hcl, 'catalyst'), factor(ola, 'catalyst'), factor(quiet, 'catalyst')], [1, 0, 0.5]);
   assert.deepEqual([factor(hcl, 'prevRange'), factor(quiet, 'prevRange')], [1, 0.5]);
 
-  // Off by default; without context the factors are simply unavailable.
+  // Without context these factors are simply unavailable.
   const plain = analyze(rows, master).stocks[0];
   assert.ok(!plain.conviction.factors.some((f) => ['catalyst', 'rvol', 'prevRange'].includes(f.key)));
   assert.equal(plain.rangeBreak, null);
