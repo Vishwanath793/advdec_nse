@@ -4,6 +4,10 @@
  */
 
 export const KITE_API = 'https://api.kite.trade';
+/** Kite's /quote takes up to 500 instruments per request, one request a second. */
+export const QUOTE_BATCH = 500;
+export const QUOTE_MAX = 1000;
+export const QUOTE_SPACING_MS = 1100;
 export const kiteLoginUrl = (apiKey) => `https://kite.zerodha.com/connect/login?v=3&api_key=${encodeURIComponent(apiKey)}`;
 
 export class KiteError extends Error {
@@ -85,6 +89,22 @@ export function createKiteClient({ fetchImpl = fetch } = {}) {
     },
     async accountSummary({ apiKey, accessToken }) {
       return summarizeMargins(await call('/user/margins/equity', { apiKey, accessToken, failure: 'Kite account summary failed' }));
+    },
+    /**
+     * Live quotes ({ "NSE:INFY": { last_price, ohlc, volume, average_price, ... } })
+     * for up to QUOTE_MAX instruments, in batches of QUOTE_BATCH (Kite's limit),
+     * spaced to stay within Kite's one-request-a-second rate limit.
+     */
+    async quote({ apiKey, accessToken, instruments }) {
+      const list = [...new Set((instruments ?? []).filter((i) => typeof i === 'string' && i.includes(':')))].slice(0, QUOTE_MAX);
+      const out = {};
+      for (let i = 0; i < list.length; i += QUOTE_BATCH) {
+        if (i) await new Promise((resolve) => setTimeout(resolve, QUOTE_SPACING_MS));
+        const query = list.slice(i, i + QUOTE_BATCH).map((id) => `i=${encodeURIComponent(id)}`).join('&');
+        const payload = await call(`/quote?${query}`, { apiKey, accessToken, failure: 'Kite quote request failed' });
+        Object.assign(out, payload.data ?? {});
+      }
+      return out;
     },
     async placeOrder({ apiKey, accessToken, order }) {
       const variety = encodeURIComponent(order.variety || 'regular');

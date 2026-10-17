@@ -33,13 +33,41 @@ export const CONVICTION_FACTORS = [
   { key: 'gap', label: 'Gap size', weight: 20, help: 'Moderate gaps score best: full marks for 0.75–2% gap-ups and 0.75–3% gap-downs; bigger gaps taper because they tend to fade.' },
   { key: 'sector', label: 'Sector strength', weight: 20, help: "Sector's average gap vs other sectors, plus peers gapping 1%+ the same way." },
   { key: 'orders', label: 'Buy/sell orders', weight: 20, help: 'Share of pending pre-open orders on the gap side (counts ¼ for F&O stocks).' },
-  { key: 'market', label: 'Market A/D agrees', weight: 20, help: 'Share of all stocks moving in the gap direction.' },
+  { key: 'market', label: 'Market A/D agrees', weight: 20, marketWide: true, help: 'Share of all stocks moving in the gap direction.' },
   { key: 'range', label: '52-week breakout', weight: 20, defaultOn: false, help: 'Full marks when opening through the 52-week high (or low); otherwise neutral.' },
   { key: 'value', label: 'Pre-open value', weight: 20, help: 'Pre-open traded value compared with other stocks.' },
   { key: 'catalyst', label: 'Results catalyst', weight: 20, defaultOn: false, help: 'Results announced since the last close score full marks; an ex-date today scores zero (the gap may be a price adjustment).' },
   { key: 'rvol', label: 'Relative volume', weight: 20, defaultOn: false, help: 'Pre-open quantity vs its 20-day average daily volume, ranked against other stocks.' },
   { key: 'prevRange', label: "Gap vs yesterday's range", weight: 20, defaultOn: false, help: "Full marks when opening beyond yesterday's high (gap-up) or low (gap-down); otherwise neutral." },
+  // Added Oct 2026, off until the report card shows they help.
+  // From the end-of-day files (stock level):
+  { key: 'delivery', label: 'Delivery % (yesterday)', weight: 20, defaultOn: false, help: "Yesterday's delivery % vs the stock's usual: unusually high delivery on an up day (accumulation) supports a gap-up; on a down day (distribution), a gap-down." },
+  { key: 'closeLoc', label: "Yesterday's close in range", weight: 20, defaultOn: false, help: 'Where yesterday closed between its low and high: near the high supports a gap-up, near the low a gap-down.' },
+  { key: 'trend', label: 'Trend (5 & 20 sessions)', weight: 20, defaultOn: false, help: 'Return over the last 5 and 20 sessions: gaps with the trend score higher than gaps against it.' },
+  // From the F&O end-of-day file (F&O stocks only):
+  { key: 'oi', label: 'F&O OI build-up', weight: 20, defaultOn: false, help: "Yesterday's stock-futures open interest: long build-up (price and OI up) supports a gap-up, short build-up (price down, OI up) a gap-down; short covering and long unwinding count half. Full marks at a 10% OI change." },
+  // Market-wide (same for every gap-up, mirrored for gap-downs):
+  { key: 'gift', label: 'GIFT Nifty', weight: 20, defaultOn: false, marketWide: true, help: 'GIFT Nifty change before the open (read just before the pre-open closes): up supports gap-ups, down supports gap-downs. Full marks at ±1%.' },
+  { key: 'vix', label: 'India VIX change', weight: 20, defaultOn: false, marketWide: true, help: "Yesterday's India VIX change: rising fear supports gap-downs, falling fear gap-ups. Full marks at ±10%." },
+  { key: 'flows', label: 'FII/DII flows', weight: 20, defaultOn: false, marketWide: true, help: "Yesterday's FII net buying (DII shown for reference): buying supports gap-ups, selling gap-downs. Full marks at ±₹3,000 Cr." },
 ];
+
+/** Full-strength points for the newer factors. */
+export const DELIVERY_FULL_X = 2; // 2× the stock's usual delivery %
+export const TREND_FULL_PCT = { short: 5, long: 10 }; // 5-session and 20-session returns
+export const GIFT_FULL_PCT = 1;
+export const VIX_FULL_PCT = 10;
+export const FLOWS_FULL_CR = 3000;
+/** A previous-day move smaller than this (%) counts as flat for the delivery factor. */
+export const FLAT_MOVE_PCT = 0.25;
+/** Open-interest change (%) for full marks; covering/unwinding count this share. */
+export const OI_FULL_PCT = 10;
+export const OI_WEAK_SHARE = 0.5;
+/** Direction each build-up favours (+1 up, −1 down) and how strongly. */
+const OI_BIAS = {
+  'long build-up': [1, 1], 'short covering': [1, OI_WEAK_SHARE],
+  'short build-up': [-1, 1], 'long unwinding': [-1, OI_WEAK_SHARE],
+};
 
 /** Default per-factor settings: { key: { on, weight } }. */
 export const DEFAULT_FACTOR_SETTINGS = Object.fromEntries(
@@ -299,18 +327,103 @@ function factorScores(stock, dir, ctx) {
     out.value = { value: rank, detail: `₹${stock.valueCr.toFixed(2)} Cr traded in pre-open (higher than ${pct(rank)} of stocks)` };
   }
 
+  Object.assign(out, historyFactors(stock, dir), marketFactors(ctx.market, dir));
+  return out;
+}
+
+const signed = (n, digits = 2) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(digits)}`;
+const clampSigned = (n) => Math.max(-1, Math.min(1, n));
+const crores = (n) => `${n < 0 ? '−' : '+'}₹${Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr`;
+const shortDate = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const leaning = (v) => (v >= 0.6 ? 'supports the gap' : v <= 0.4 ? 'against the gap' : 'neutral');
+
+/** Delivery %, close location and trend, from the end-of-day files. */
+function historyFactors(stock, dir) {
+  const up = dir > 0;
+  const out = {};
+
+  if (stock.delivX != null && stock.prevMovePct != null) {
+    const strength = clamp01((stock.delivX - 1) / (DELIVERY_FULL_X - 1));
+    const moved = Math.abs(stock.prevMovePct) < FLAT_MOVE_PCT ? 0 : Math.sign(stock.prevMovePct);
+    const value = 0.5 + 0.5 * strength * moved * dir;
+    const kind = strength === 0 || moved === 0 ? 'normal delivery or a flat day (neutral)'
+      : moved > 0 ? 'buying taken for delivery (accumulation)' : 'selling taken for delivery (distribution)';
+    out.delivery = {
+      value,
+      detail: `Yesterday ${signed(stock.prevMovePct)}% on ${stock.delivPct.toFixed(1)}% delivery, ${stock.delivX.toFixed(1)}× its usual ${stock.delivAvg.toFixed(1)}%: ${kind}`,
+    };
+  }
+
+  if (stock.closeLocation != null) {
+    const value = up ? stock.closeLocation : 1 - stock.closeLocation;
+    const where = stock.closeLocation >= 0.7 ? 'near the high' : stock.closeLocation <= 0.3 ? 'near the low' : 'mid-range';
+    out.closeLoc = { value, detail: `Yesterday closed at ${pct(stock.closeLocation)} of its low–high range (${where})` };
+  }
+
+  if (stock.ret5 != null) {
+    const short = clampSigned((dir * stock.ret5) / TREND_FULL_PCT.short);
+    const long = stock.ret20 != null ? clampSigned((dir * stock.ret20) / TREND_FULL_PCT.long) : short;
+    const value = 0.5 + 0.25 * short + 0.25 * long;
+    out.trend = {
+      value,
+      detail: `5 sessions ${signed(stock.ret5, 1)}%, 20 sessions ${stock.ret20 != null ? `${signed(stock.ret20, 1)}%` : 'n/a'}: ${value >= 0.6 ? 'with the gap' : value <= 0.4 ? 'against the gap' : 'no clear trend'}`,
+    };
+  }
+
+  if (stock.foBuild) {
+    const [bias, share] = OI_BIAS[stock.foBuild] ?? [0, 0];
+    const strength = clamp01(Math.abs(stock.foOiChangePct) / OI_FULL_PCT) * share;
+    const value = 0.5 + 0.5 * strength * bias * dir;
+    out.oi = {
+      value,
+      detail: `Futures ${signed(stock.foPricePct)}% with open interest ${signed(stock.foOiChangePct, 1)}% yesterday: ${stock.foBuild}, ${leaning(value)}`,
+    };
+  }
+  return out;
+}
+
+/** GIFT Nifty, India VIX and FII/DII flows: the same reading for every stock, mirrored by direction. */
+function marketFactors(market, dir) {
+  const out = {};
+  const gift = market?.gift;
+  if (gift?.pct != null) {
+    const value = 0.5 + 0.5 * clampSigned((dir * gift.pct) / GIFT_FULL_PCT);
+    const time = new Date(gift.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
+    out.gift = {
+      value,
+      detail: `GIFT Nifty ${gift.last.toLocaleString('en-IN')} (${signed(gift.pct)}%) at ${time} IST${gift.morning === false ? ', read after the pre-open closed' : ''}: ${leaning(value)}`,
+    };
+  }
+  const vix = market?.vix;
+  if (vix?.pct != null) {
+    const value = 0.5 - 0.5 * clampSigned((dir * vix.pct) / VIX_FULL_PCT);
+    out.vix = {
+      value,
+      detail: `India VIX ${vix.last} (${signed(vix.pct)}%) on ${shortDate(vix.date)}: ${vix.pct > 0 ? 'fear rising' : vix.pct < 0 ? 'fear easing' : 'unchanged'}, ${leaning(value)}`,
+    };
+  }
+  const flows = market?.flows;
+  if (flows?.fii != null) {
+    const value = 0.5 + 0.5 * clampSigned((dir * flows.fii) / FLOWS_FULL_CR);
+    out.flows = {
+      value,
+      detail: `FII net ${crores(flows.fii)}${flows.dii != null ? `, DII net ${crores(flows.dii)}` : ''} on ${shortDate(flows.date)}: ${leaning(value)}`,
+    };
+  }
   return out;
 }
 
 /**
  * Attach `conviction` ({ score, direction, factors }) and a flat
- * `convictionScore` to each stock. Unchanged stocks get null.
+ * `convictionScore` to each stock. Unchanged stocks get null. `market` is the
+ * context's market signals (GIFT Nifty, India VIX, FII/DII), when available.
  */
-export function scoreConviction(stocks, sectors, summary, factorSettings = null) {
+export function scoreConviction(stocks, sectors, summary, factorSettings = null, market = null) {
   const weights = factorWeights(factorSettings);
   const excluded = CONVICTION_FACTORS.filter((f) => !weights[f.key]).map((f) => f.label);
   const ctx = {
     summary,
+    market,
     values: stocks.map((s) => s.valueCr).filter((v) => v != null).sort((a, b) => a - b),
     ...sectorStrength(stocks, sectors),
   };

@@ -174,7 +174,7 @@ export function analyze(pmRows, masterRows, secList = null, options = {}) {
   const total = advances + declines + unchanged;
   const adRatio = declines > 0 ? advances / declines : advances > 0 ? Infinity : null;
   const summary = { total, advances, declines, unchanged, skipped, adRatio };
-  scoreConviction(stocks, sectors, summary, options.convictionFactors);
+  scoreConviction(stocks, sectors, summary, options.convictionFactors, options.context?.market ?? null);
 
   return {
     summary,

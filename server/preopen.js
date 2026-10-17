@@ -12,7 +12,8 @@ export function cronExpression(time) {
   return `${minute} ${hour} * * *`;
 }
 
-export function createPreopenService({ file, fetchImpl = fetch, schedule = cron.schedule }) {
+/** `onSnapshot(snapshot)` runs after each successful fetch (the daily recorder). */
+export function createPreopenService({ file, fetchImpl = fetch, schedule = cron.schedule, onSnapshot = null }) {
   let state = { config: { enabled: true, time: '09:10' }, snapshot: null, lastAttempt: null, lastError: null };
   try {
     const saved = JSON.parse(readFileSync(file, 'utf8'));
@@ -52,6 +53,7 @@ export function createPreopenService({ file, fetchImpl = fetch, schedule = cron.
         persist({ ...state, lastAttempt: new Date().toISOString(), lastError: null });
         const snapshot = await fetchPreopenSnapshot(fetchImpl);
         persist({ ...state, snapshot, lastError: null });
+        Promise.resolve(onSnapshot?.(snapshot)).catch((error) => console.error(`Recorder: ${error.message}`));
       } catch (error) {
         const message = error.name === 'TimeoutError' ? 'NSE request timed out. Please try again.' : error.message;
         state = { ...state, lastError: message };

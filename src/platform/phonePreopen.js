@@ -15,7 +15,7 @@ export const NOTIFY_DAYS = 14;
  *    once the scheduled time has passed and today's data isn't loaded yet.
  * Same state shape and status() as the backend, so the UI is unchanged.
  */
-export function createPhonePreopen({ store, fetchImpl, calendar, now = () => new Date(), notifier = null }) {
+export function createPhonePreopen({ store, fetchImpl, calendar, now = () => new Date(), notifier = null, onSnapshot = null }) {
   let state = { config: { enabled: true, time: '09:10' }, snapshot: null, lastAttempt: null, lastError: null };
   let loaded = null;
   let running = null;
@@ -51,6 +51,7 @@ export function createPhonePreopen({ store, fetchImpl, calendar, now = () => new
         await persist({ ...state, lastAttempt: now().toISOString(), lastError: null });
         const snapshot = await fetchPreopenSnapshot(fetchImpl, now);
         await persist({ ...state, snapshot, lastError: null });
+        Promise.resolve(onSnapshot?.(snapshot)).catch(() => {}); // the daily recorder
       } catch (error) {
         const message = error.name === 'TimeoutError' ? 'NSE request timed out. Please try again.' : error.message;
         await persist({ ...state, lastError: message });
@@ -104,5 +105,7 @@ export function createPhonePreopen({ store, fetchImpl, calendar, now = () => new
       if (due()) await refresh().catch(() => {}); // the error is kept in state.lastError
     },
     async reschedule() { await load(); await reschedule(); },
+    /** The saved snapshot, if any (recorded on start in case it was never recorded). */
+    async snapshot() { await load(); return state.snapshot; },
   };
 }

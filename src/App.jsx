@@ -13,11 +13,18 @@ import {
   weightShares,
 } from './utils/conviction.js';
 import { isTradeable, roomToCircuit, MIN_ROOM_PCT } from './utils/tradeability.js';
-import { HIGH_RVOL_X } from './utils/signals.js';
-import { api } from './platform/index.js';
+import { HIGH_DELIVERY_X, HIGH_RVOL_X, NOTABLE_OI_PCT } from './utils/signals.js';
+import { api, isNativeApp } from './platform/index.js';
+import { exportFileName, stocksWorkbook } from './utils/exportStocks.js';
+import { indiaDate, istInstant, marketDay } from './core/calendar.js';
+import { snapshotDate } from './core/recorder.js';
+import holidayCalendar from '../server/tv/holidays.json';
 import { kiteLoginUrl } from './core/kite.js';
 import SettingsPage from './SettingsPage.jsx';
 import TvResearchPage from './TvResearchPage.jsx';
+import ReportCardPage from './ReportCardPage.jsx';
+import ConfirmPage from './ConfirmPage.jsx';
+import OrdersPage from './OrdersPage.jsx';
 import { formatIST } from './NseScheduleSettings.jsx';
 import { loadSettings, saveSettings, loadSession, saveSession } from './store.js';
 
@@ -42,6 +49,9 @@ export default function App() {
     if (hash === '#/tv-research' && api.features.tvResearch) return 'tv-research';
     if (hash === '#/settings') return 'settings';
     if (hash === '#/positions') return 'positions';
+    if (hash === '#/report') return 'report';
+    if (hash === '#/confirm') return 'confirm';
+    if (hash === '#/orders') return 'orders';
     return 'analyze';
   });
   const [settings, setSettings] = useState(loadSettings);
@@ -59,6 +69,8 @@ export default function App() {
   const [masterSource, setMasterSource] = useState(null);
   const [masterStatus, setMasterStatus] = useState(null); // { type, message }
   const [pmFileName, setPmFileName] = useState(null);
+  // Where the loaded pre-open came from: the NSE snapshot or an uploaded file (date unknown, so today).
+  const [dataSource, setDataSource] = useState('nse');
   const [pmRows, setPmRows] = useState(null);
   const [priceBands, setPriceBands] = useState(null); // { fetchedAt, bands, lastError? }
   const [marketContext, setMarketContext] = useState(null); // { history, events, error } from /api/nse/context
@@ -83,6 +95,17 @@ export default function App() {
   const fileInputRef = useRef(null);
   const masterInputRef = useRef(null);
   const stocksSectionRef = useRef(null);
+  const [exportMessage, setExportMessage] = useState(null); // { type, text }
+  const [orderDraft, setOrderDraft] = useState(null); // prefill for the Orders form (from the Confirm tab)
+  const clearOrderDraft = useCallback(() => setOrderDraft(null), []);
+  // Hand the Kite session to the scheduled-order sender. Only set here, never cleared: a browser
+  // without a login must not wipe the session another one gave (logout clears it explicitly).
+  useEffect(() => {
+    if (session?.access_token && settings.kiteApiKey) {
+      api.scheduledOrders.setSession({ apiKey: settings.kiteApiKey, accessToken: session.access_token, userId: session.user_id }).catch(() => {});
+    }
+  }, [session, settings.kiteApiKey]);
+  const [exportStatus, setExportStatus] = useState(null); // backend 9:30 auto-save status
 
   const loadBundledMaster = useCallback(() => {
     return fetch('/master_stock.csv')
@@ -157,12 +180,17 @@ export default function App() {
     }
   };
 
-  // Yesterday's range, average volume and today's corporate events. Reloaded with
-  // each new NSE snapshot; events are cached and refreshed at most every 10 minutes.
+  // Yesterday's range, volume, delivery and trend, corporate events and market signals,
+  // as of the morning of the loaded pre-open's trading day (so Friday's pre-open viewed
+  // on Saturday doesn't use Friday's close). Reloaded with each new NSE snapshot.
   const snapshotFetchedAt = nseData?.snapshot?.fetchedAt;
+  const contextDate = dataSource === 'upload' ? null : snapshotDate(nseData?.snapshot, holidayCalendar);
+  // Wait for the first NSE status, so the context is requested once, for the right day.
+  const contextReady = dataSource === 'upload' || nseData !== null;
   useEffect(() => {
+    if (!contextReady) return undefined;
     let cancelled = false;
-    api.context.get()
+    api.context.get(contextDate)
       .then((payload) => {
         if (cancelled) return;
         setMarketContext(payload);
@@ -170,7 +198,7 @@ export default function App() {
       })
       .catch((e) => { if (!cancelled) setMarketContextError(e.message); });
     return () => { cancelled = true; };
-  }, [snapshotFetchedAt]);
+  }, [contextReady, contextDate, snapshotFetchedAt]);
 
   // NSE price bands (circuit %), refreshed once per IST day.
   useEffect(() => {
@@ -204,6 +232,7 @@ export default function App() {
     if (!masterRows || !snapshot || appliedNseSnapshot.current === snapshot.fetchedAt) return;
     appliedNseSnapshot.current = snapshot.fetchedAt;
     setPmRows(snapshot.rows);
+    setDataSource('nse');
     setPmFileName(`NSE pre-open · ${snapshot.marketUpdatedAt ?? formatIST(snapshot.fetchedAt)}`);
     setError(null);
     setSectorFilter('all');
@@ -219,6 +248,9 @@ export default function App() {
       if (hash === '#/settings') setPage('settings');
       else if (hash === '#/tv-research' && api.features.tvResearch) setPage('tv-research');
       else if (hash === '#/positions') setPage('positions');
+      else if (hash === '#/report') setPage('report');
+      else if (hash === '#/confirm') setPage('confirm');
+      else if (hash === '#/orders') setPage('orders');
       else setPage('analyze');
     };
     window.addEventListener('hashchange', onHash);
@@ -303,6 +335,7 @@ export default function App() {
   };
 
   const handleKiteLogout = () => {
+    api.scheduledOrders.setSession(null).catch(() => {}); // scheduled orders can no longer be sent
     setSession(null);
     saveSession(null);
     setKiteStatus({ type: 'info', message: 'Disconnected.' });
@@ -319,6 +352,7 @@ export default function App() {
           const rows = rowsToObjects(parseCSV(String(reader.result)));
           if (rows.length === 0) throw new Error('No data rows found in the file.');
           setPmRows(rows);
+          setDataSource('upload');
           setSectorFilter('all');
           setStatusFilter('all');
           setSearch('');
@@ -363,6 +397,27 @@ export default function App() {
       return direction === 'asc' ? comparison : -comparison;
     });
   }, [filteredStocks, stockSort]);
+
+  // Excel download of the table as shown (filters and sort), with the conviction breakdown.
+  const tableFilters = [
+    search.trim() && `search "${search.trim()}"`,
+    sectorFilter !== 'all' && `sector ${sectorFilter}`,
+    statusFilter !== 'all' && `${statusFilter}s only`,
+    tableTradeableOnly && 'tradeable only',
+  ].filter(Boolean).join(', ') || 'None (all stocks)';
+  const saveStocksFile = async (stocks, filters) => {
+    const at = new Date();
+    const bytes = stocksWorkbook(stocks, settings.convictionFactors, { exportedAt: at, source: pmFileName ?? '', filters });
+    return api.files.save(exportFileName(at), bytes);
+  };
+  const downloadStocks = async () => {
+    try {
+      const where = await saveStocksFile(sortedStocks, tableFilters);
+      setExportMessage({ type: 'info', text: `Saved ${sortedStocks.length} stocks to ${where}.` });
+    } catch (e) {
+      setExportMessage({ type: 'error', text: `Could not save the file: ${e.message}` });
+    }
+  };
 
   const toggleStockSort = (key) => {
     setStockSort((current) => ({
@@ -467,6 +522,59 @@ export default function App() {
       </span>
     ));
 
+  // GIFT Nifty, India VIX and FII/DII for today (from the context), with details on hover.
+  const renderMarketSignals = () => {
+    const m = marketContext?.market;
+    if (!m) return null;
+    const fmtSigned = (n, unit = '%') => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}${unit}`;
+    const crore = (n, digits = 0) => (n == null ? '—'
+      : `${n > 0 ? '+' : n < 0 ? '−' : ''}₹${Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: digits })}`);
+    const day = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+    const use = (key) => (activeWeights[key] ? `In your conviction score (weight ${activeWeights[key]}).` : 'Not in your conviction score: turn it on in "Conviction factors".');
+    const tone = (v) => (v > 0 ? 'adv-text' : v < 0 ? 'dec-text' : '');
+    const items = [
+      m.gift
+        ? {
+          key: 'gift', label: 'GIFT Nifty', tone: tone(m.gift.pct),
+          value: `${m.gift.last.toLocaleString('en-IN')} (${fmtSigned(m.gift.pct)})`,
+          when: formatIST(m.gift.at),
+          title: `GIFT Nifty (Nifty futures on NSE IX) ${m.gift.morning ? 'before the pre-open closed' : 'after the pre-open closed (no reading before 09:08 was caught)'}, ${formatIST(m.gift.at)}. `
+            + `Change ${fmtSigned(m.gift.change ?? 0, '')} pts vs its previous close; Nifty 50 last closed at ${m.gift.niftyClose?.toLocaleString('en-IN') ?? '—'}. `
+            + `Up favours gap-ups, down favours gap-downs. ${use('gift')}`,
+        }
+        : { key: 'gift', label: 'GIFT Nifty', value: '—', title: `No GIFT Nifty reading for today yet (read at 9:07 IST). ${use('gift')}` },
+      m.vix
+        ? {
+          key: 'vix', label: 'India VIX', tone: tone(-m.vix.pct),
+          value: `${m.vix.last} (${fmtSigned(m.vix.pct)})`,
+          when: day(m.vix.date),
+          title: `India VIX closed at ${m.vix.last} on ${day(m.vix.date)} (${fmtSigned(m.vix.pct)}). Rising fear favours gap-downs; easing fear favours gap-ups. ${use('vix')}`,
+        }
+        : { key: 'vix', label: 'India VIX', value: '—', title: `Yesterday's India VIX close isn't available yet (read after 15:30 and before the open). ${use('vix')}` },
+      m.flows
+        ? {
+          key: 'flows', label: 'FII / DII', tone: tone(m.flows.fii ?? 0),
+          value: `${crore(m.flows.fii)} / ${crore(m.flows.dii)} Cr`,
+          when: day(m.flows.date),
+          title: `Net cash-market buying on ${day(m.flows.date)}: FII ${crore(m.flows.fii, 2)} Cr, DII ${crore(m.flows.dii, 2)} Cr. `
+            + `FII buying favours gap-ups, selling favours gap-downs. ${use('flows')}`,
+        }
+        : { key: 'flows', label: 'FII / DII', value: '—', title: `Yesterday's FII/DII figures aren't available yet (NSE publishes them in the evening). ${use('flows')}` },
+    ];
+    return (
+      <div className="market-signals" aria-label="Market signals">
+        <span className="hint">Market signals:</span>
+        {items.map((i) => (
+          <span key={i.key} className={`market-signal ${activeWeights[i.key] ? 'on' : ''}`} title={i.title}>
+            <span className="market-signal-label">{i.label}</span>{' '}
+            <strong className={i.tone}>{i.value}</strong>
+            {i.when && <span className="hint"> · {i.when}</span>}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
   // Decision signals (results, relative volume, gap vs yesterday's range).
   // `compact` (top movers) shows only the notable ones.
   const renderSignals = (s, compact = false) => {
@@ -485,6 +593,25 @@ export default function App() {
         cls: s.rvolX >= HIGH_RVOL_X ? 'high' : 'muted',
         label: `Vol ${x}×`,
         title: `Pre-open quantity ${s.finalVolume?.toLocaleString('en-IN')} = ${s.rvolPct.toFixed(2)}% of its 20-day average daily volume (${Math.round(s.avgVolume).toLocaleString('en-IN')}); ${x}× the typical stock, higher than ${Math.round(s.rvolRank * 100)}% of stocks.`,
+      });
+    }
+    if (s.delivX != null && s.delivX >= HIGH_DELIVERY_X && s.prevMovePct != null) {
+      const up = s.prevMovePct >= 0;
+      items.push({
+        key: 'deliv',
+        cls: 'good',
+        label: `Deliv ${s.delivX.toFixed(1)}×`,
+        title: `Yesterday ${s.prevMovePct >= 0 ? '+' : ''}${s.prevMovePct.toFixed(2)}% on ${s.delivPct.toFixed(1)}% delivery, ${s.delivX.toFixed(1)}× its usual ${s.delivAvg.toFixed(1)}%: `
+          + `${up ? 'buying taken for delivery (accumulation), supports a gap-up' : 'selling taken for delivery (distribution), supports a gap-down'}.`,
+      });
+    }
+    if (s.foBuild && s.foBuild !== 'neutral' && Math.abs(s.foOiChangePct) >= NOTABLE_OI_PCT) {
+      const bullish = s.foBuild === 'long build-up' || s.foBuild === 'short covering';
+      items.push({
+        key: 'oi',
+        cls: bullish === (s.status === 'advance') ? 'good' : 'warn',
+        label: `OI ${s.foBuild}`,
+        title: `Yesterday the stock's futures moved ${s.foPricePct >= 0 ? '+' : ''}${s.foPricePct.toFixed(2)}% while open interest changed ${s.foOiChangePct >= 0 ? '+' : ''}${s.foOiChangePct.toFixed(1)}% (now ${s.foOi?.toLocaleString('en-IN')} shares): ${s.foBuild}, ${bullish ? 'bullish' : 'bearish'} positioning.`,
       });
     }
     if (s.rangeBreak === 'above' || s.rangeBreak === 'below') {
@@ -510,6 +637,44 @@ export default function App() {
     saveSettings(next);
   };
   const updateMinMarketCap = (value) => updateSetting({ minMarketCapCr: Math.max(0, Number(value) || 0) });
+
+  // The backend's 9:30 file uses the factors chosen here.
+  useEffect(() => {
+    if (!api.exports) return undefined;
+    const timer = setTimeout(() => {
+      api.exports.saveSettings(settings.convictionFactors).then(setExportStatus).catch(() => {});
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [settings.convictionFactors]);
+  useEffect(() => {
+    api.exports?.status().then(setExportStatus).catch(() => {});
+  }, []);
+
+  // Phone app (no backend): save the full table once per trading day after 9:30 while the app is open.
+  const phoneAutoSave = useRef(null);
+  phoneAutoSave.current = async () => {
+    const now = new Date();
+    const today = indiaDate(now);
+    let done = null;
+    try { done = localStorage.getItem('ad_auto_export_date'); } catch { /* storage unavailable */ }
+    if (done === today || !result || !marketDay(today, holidayCalendar).open) return;
+    if (now < istInstant(today, '09:30') || now > istInstant(today, '15:30')) return;
+    if (snapshotDate(nseData?.snapshot, holidayCalendar) !== today || !pmFileName?.startsWith('NSE pre-open')) return;
+    try {
+      const where = await saveStocksFile(result.stocks, 'None (all stocks); saved automatically at 9:30');
+      localStorage.setItem('ad_auto_export_date', today);
+      setExportMessage({ type: 'info', text: `Saved today's 9:30 table to ${where}.` });
+    } catch (e) {
+      setExportMessage({ type: 'error', text: `Automatic 9:30 save failed: ${e.message}` });
+    }
+  };
+  useEffect(() => {
+    if (!isNativeApp) return undefined;
+    const check = () => phoneAutoSave.current?.();
+    check();
+    const timer = setInterval(check, 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Conviction factor on/off + weights (saved with the other settings).
   // Normalised the same way as the score (factorWeights), so the panel shows what is actually used.
@@ -778,8 +943,17 @@ export default function App() {
         <a href="#/" className={`nav-link ${page === 'analyze' ? 'active' : ''}`}>
           Analyzer
         </a>
+        <a href="#/confirm" className={`nav-link ${page === 'confirm' ? 'active' : ''}`}>
+          9:15 Confirm
+        </a>
+        <a href="#/orders" className={`nav-link ${page === 'orders' ? 'active' : ''}`}>
+          Orders
+        </a>
         <a href="#/positions" className={`nav-link ${page === 'positions' ? 'active' : ''}`}>
           Positions
+        </a>
+        <a href="#/report" className={`nav-link ${page === 'report' ? 'active' : ''}`}>
+          Report card
         </a>
         {api.features.tvResearch && (
           <a href="#/tv-research" className={`nav-link ${page === 'tv-research' ? 'active' : ''}`}>TV research</a>
@@ -792,7 +966,28 @@ export default function App() {
         </span>
       </nav>
 
-      {page === 'tv-research' ? <TvResearchPage /> : page === 'settings' ? (
+      {page === 'tv-research' ? <TvResearchPage /> : page === 'orders' ? (
+        <OrdersPage
+          stocks={result?.stocks}
+          settings={settings}
+          session={session}
+          draft={orderDraft}
+          onDraftUsed={clearOrderDraft}
+        />
+      ) : page === 'confirm' ? (
+        <ConfirmPage
+          stocks={result?.stocks}
+          date={contextDate}
+          session={session}
+          apiKey={settings.kiteApiKey}
+          checkSettings={settings.confirmChecks}
+          blend={settings.confirmBlend}
+          onSettings={updateSetting}
+          onSchedule={(d) => { setOrderDraft(d); window.location.hash = '#/orders'; }}
+        />
+      ) : page === 'report' ? (
+        <ReportCardPage factorSettings={settings.convictionFactors} />
+      ) : page === 'settings' ? (
         <SettingsPage
           settings={settings}
           onSave={handleSaveSettings}
@@ -1038,6 +1233,8 @@ export default function App() {
             </div>
           )}
 
+          {renderMarketSignals()}
+
           {/* Conviction factor controls */}
           <details className="conviction-settings">
             <summary>
@@ -1231,7 +1428,23 @@ export default function App() {
 
           {/* Stock detail */}
           <section ref={stocksSectionRef}>
-            <h2>Stocks ({filteredStocks.length.toLocaleString()})</h2>
+            <div className="section-head">
+              <h2>Stocks ({filteredStocks.length.toLocaleString()})</h2>
+              <div className="export-actions">
+                <button type="button" className="btn" onClick={downloadStocks} disabled={!sortedStocks.length}
+                  title="Excel file of the table as shown, with every conviction factor's score and weight and the factor settings">
+                  ⬇ Download (.xlsx)
+                </button>
+                <span className="hint">
+                  {isNativeApp
+                    ? 'Saved automatically at 9:30 IST on trading days while the app is open (Documents/AdvDec).'
+                    : exportStatus
+                      ? `Saved automatically at ${exportStatus.time} IST on trading days to ${exportStatus.dir}${exportStatus.last ? ` · last: ${exportStatus.last.file.split(/[\\/]/).pop()}` : ''}.`
+                      : ''}
+                </span>
+              </div>
+            </div>
+            {exportMessage && <div className={`alert ${exportMessage.type}`}>{exportMessage.text}</div>}
             <div className="filters">
               <input
                 type="search"

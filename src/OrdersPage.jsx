@@ -1,0 +1,288 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { api } from './platform/index.js';
+import { indiaDate, istInstant, marketDay } from './core/calendar.js';
+import holidayCalendar from '../server/tv/holidays.json';
+import { ORDER_GRACE_MS, ORDER_WINDOW } from './core/orderScheduler.js';
+import { tickSize } from './utils/analysis.js';
+
+const QUICK_TIMES = ['09:15:00', '09:15:05', '09:20:00', '09:20:05', '09:30:00'];
+const STATUS_CLASS = { scheduled: 'unchanged', placing: 'unchanged', placed: 'advance', failed: 'decline', missed: 'decline', cancelled: '' };
+const rs = (n) => (n == null ? '—' : `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+const istParts = (d) => Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+}).formatToParts(d).map((p) => [p.type, p.value]));
+const when = (iso) => { const p = istParts(new Date(iso)); return `${p.weekday} ${p.day} ${p.month}, ${p.hour}:${p.minute}:${p.second}`; };
+const timeOnly = (d) => { const p = istParts(d); return `${p.hour}:${p.minute}:${p.second}`; };
+
+/** Today if it's a trading day and the window hasn't closed, else the next trading day. */
+function defaultDate(now) {
+  let d = indiaDate(now);
+  if (marketDay(d, holidayCalendar).open && now < istInstant(d, ORDER_WINDOW.end)) return d;
+  for (let i = 0; i < 15; i++) {
+    const next = new Date(`${d}T12:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    d = next.toISOString().slice(0, 10);
+    if (marketDay(d, holidayCalendar).open) return d;
+  }
+  return d;
+}
+
+function countdown(ms) {
+  if (ms <= 0) return 'now';
+  const s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s % 60}s`;
+}
+
+/**
+ * Time-triggered orders: pick a stock, Buy or Sell, quantity, Market or
+ * Limit, and the second it should be sent to Kite.
+ */
+export default function OrdersPage({ stocks, settings, session, draft, onDraftUsed }) {
+  const [now, setNow] = useState(() => new Date());
+  const [orders, setOrders] = useState([]);
+  const [scheduler, setScheduler] = useState(null); // { connected, userId }
+  const [message, setMessage] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState(() => ({
+    symbol: '', side: 'BUY', quantity: settings.quantity || 1, orderType: 'MARKET', price: '',
+    product: ['MIS', 'CNC', 'NRML'].includes(settings.product) ? settings.product : 'MIS',
+    date: defaultDate(new Date()), time: '09:15:00',
+  }));
+  const set = (patch) => setForm((f) => ({ ...f, ...patch }));
+
+  const bySymbol = useMemo(() => new Map((stocks ?? []).map((s) => [s.symbol, s])), [stocks]);
+  const stock = bySymbol.get(form.symbol.trim().toUpperCase());
+
+  // A draft from the Confirm tab fills the form once.
+  useEffect(() => {
+    if (!draft) return;
+    // Out of hours (weekend, holiday, after the close), move to the next session's 09:20.
+    const t = new Date();
+    const usable = draft.date && marketDay(draft.date, holidayCalendar).open
+      && new Date(`${draft.date}T${draft.time}+05:30`) < istInstant(draft.date, ORDER_WINDOW.end);
+    setForm((f) => ({ ...f, ...draft, ...(usable ? {} : { date: defaultDate(t), time: '09:20:00' }) }));
+    setMessage({ type: 'info', text: `Filled in from the Confirm tab: check the details, then schedule.` });
+    onDraftUsed?.();
+  }, [draft, onDraftUsed]);
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await api.scheduledOrders.list();
+      setOrders(r.orders ?? []);
+      setScheduler(r.session ?? null);
+    } catch (e) {
+      setMessage({ type: 'error', text: `Could not load scheduled orders: ${e.message}` });
+    }
+  }, []);
+
+  // Tick every second for the countdowns; reload the list often only when an order is near.
+  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    let last = 0;
+    const timer = setInterval(() => {
+      const t = new Date();
+      setNow(t);
+      const soon = orders.some((o) => (o.status === 'scheduled' && new Date(o.triggerAt) - t < 120_000) || o.status === 'placing');
+      if (t - last >= (soon ? 2_000 : 15_000)) { last = +t; refresh(); }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [orders, refresh]);
+
+  const triggerAt = form.date && /^\d{2}:\d{2}(:\d{2})?$/.test(form.time)
+    ? new Date(`${form.date}T${form.time.length === 5 ? `${form.time}:00` : form.time}+05:30`) : null;
+  const priceNum = Number(form.price);
+  const tick = priceNum > 0 ? tickSize(priceNum) : null;
+  const summary = `${form.side} ${form.quantity} ${form.symbol.trim().toUpperCase() || '…'} at ${form.orderType === 'LIMIT' ? `limit ${form.price ? rs(priceNum) : '…'}` : 'market'} (${form.product})${triggerAt ? `, sent at ${when(triggerAt.toISOString())} IST` : ''}`;
+
+  const schedule = async (e) => {
+    e.preventDefault();
+    if (!triggerAt) { setMessage({ type: 'error', text: 'Choose a date and time.' }); return; }
+    if (!window.confirm(`Schedule this order?\n\n${summary}\n\nIt will be sent to Kite automatically at that time.`)) return;
+    setBusy(true);
+    try {
+      const r = await api.scheduledOrders.add({
+        symbol: form.symbol, side: form.side, quantity: Number(form.quantity), orderType: form.orderType,
+        price: form.orderType === 'LIMIT' ? Number(form.price) : null, product: form.product, exchange: settings.exchange || 'NSE',
+        triggerAt: triggerAt.toISOString(), marketProtection: settings.marketProtection, autoslice: settings.autoslice, tag: settings.tag,
+        note: stock ? `Conviction ${stock.convictionScore ?? '—'}` : '',
+      });
+      setOrders(r.orders ?? []);
+      setScheduler(r.session ?? null);
+      setMessage({ type: r.warnings?.length ? 'warn' : 'info', text: [`Scheduled ${r.order.id}: ${summary}.`, ...(r.warnings ?? [])].join(' ') });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancel = async (o) => {
+    if (!window.confirm(`Cancel ${o.side} ${o.quantity} ${o.symbol} at ${timeOnly(new Date(o.triggerAt))}?`)) return;
+    try {
+      const r = await api.scheduledOrders.cancel(o.id);
+      setOrders(r.orders ?? []);
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  const pending = orders.filter((o) => o.status === 'scheduled' || o.status === 'placing');
+  const history = orders.filter((o) => !pending.includes(o));
+  const nextMinute = () => {
+    const t = new Date(Math.ceil((+now + 60_000) / 60_000) * 60_000);
+    set({ date: indiaDate(t), time: timeOnly(t) });
+  };
+  const notConnected = !session?.access_token || !settings.kiteApiKey;
+
+  return (
+    <div className="orders-page">
+      <div className="section-head"><h2>Scheduled orders</h2></div>
+      <p className="hint">
+        Pick a stock, Buy or Sell, quantity, Market or Limit, and the exact second it should be sent to Kite.
+        {api.scheduledOrders.runsInBackground
+          ? ' The backend sends it, so this page or browser can be closed, but the backend must be running and you must have logged in to Kite today (the token is kept in memory only).'
+          : ' On the phone the app sends it: keep the app open on screen at that time.'}
+        {` If it can’t be sent within ${ORDER_GRACE_MS / 1000} s of the time (machine asleep, app closed), it is marked missed and never sent late.`}
+      </p>
+      {notConnected ? (
+        <div className="alert warn">Kite is not connected: log in to Kite in Settings, or scheduled orders will fail at their time.</div>
+      ) : scheduler && !scheduler.connected ? (
+        <div className="alert warn">The order sender has no Kite session yet; it gets it from this browser in a moment.</div>
+      ) : (
+        <div className="alert info">Kite connected{scheduler?.userId ? ` (${scheduler.userId})` : ''}: scheduled orders will be sent with this session.</div>
+      )}
+      {message && <div className={`alert ${message.type}`}>{message.text}</div>}
+
+      <form className="settings-card order-form" onSubmit={schedule}>
+        <div className="order-grid">
+          <label className="field">
+            <span>Stock</span>
+            <input
+              list="order-symbols" value={form.symbol} placeholder="e.g. INFY" autoComplete="off"
+              onChange={(e) => set({ symbol: e.target.value.toUpperCase() })} required
+            />
+            <datalist id="order-symbols">
+              {(stocks ?? []).filter((s) => s.convictionScore != null).sort((a, b) => b.convictionScore - a.convictionScore).map((s) => (
+                <option key={s.symbol} value={s.symbol}>{`${s.company} · conviction ${s.convictionScore} · ${s.pctChange > 0 ? '+' : ''}${s.pctChange}%`}</option>
+              ))}
+            </datalist>
+            <span className="hint">
+              {stock
+                ? `${stock.company} · pre-open ${rs(stock.finalPrice)} (${stock.pctChange > 0 ? '+' : ''}${stock.pctChange}%)${stock.convictionScore != null ? ` · conviction ${stock.convictionScore}` : ''}`
+                : form.symbol ? 'Not in the loaded pre-open (any NSE symbol works).' : 'Type or pick a symbol; gappers are listed by conviction.'}
+            </span>
+          </label>
+          <div className="field">
+            <span>Side</span>
+            <div className="segmented">
+              {['BUY', 'SELL'].map((s) => (
+                <button key={s} type="button" className={`btn trade ${s === 'BUY' ? 'buy' : 'sell'} ${form.side === s ? 'active' : ''}`} onClick={() => set({ side: s })}>
+                  {s === 'BUY' ? 'Buy' : 'Sell'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="field">
+            <span>Quantity</span>
+            <input type="number" min="1" step="1" value={form.quantity} onChange={(e) => set({ quantity: e.target.value })} required />
+            {stock?.finalPrice && Number(form.quantity) > 0 && <span className="hint">≈ {rs(stock.finalPrice * Number(form.quantity))} at the pre-open price</span>}
+          </label>
+          <div className="field">
+            <span>Order type</span>
+            <div className="segmented">
+              {['MARKET', 'LIMIT'].map((t) => (
+                <button key={t} type="button" className={`btn ${form.orderType === t ? 'primary' : ''}`}
+                  onClick={() => set({ orderType: t, price: t === 'LIMIT' && !form.price && stock?.finalPrice ? String(stock.finalPrice) : form.price })}>
+                  {t === 'MARKET' ? 'Market' : 'Limit'}
+                </button>
+              ))}
+            </div>
+          </div>
+          {form.orderType === 'LIMIT' && (
+            <label className="field">
+              <span>Limit price (₹)</span>
+              <input type="number" min="0.01" step="0.01" value={form.price} onChange={(e) => set({ price: e.target.value })} required />
+              <span className="hint">{tick ? `Tick ₹${tick}; ${form.side === 'BUY' ? 'buys at this price or lower' : 'sells at this price or higher'}.` : 'Prefilled with the pre-open price.'}</span>
+            </label>
+          )}
+          <label className="field">
+            <span>Product</span>
+            <select value={form.product} onChange={(e) => set({ product: e.target.value })}>
+              <option value="MIS">MIS (intraday)</option>
+              <option value="CNC">CNC (delivery)</option>
+              <option value="NRML">NRML</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Date</span>
+            <input type="date" value={form.date} onChange={(e) => set({ date: e.target.value })} required />
+            <span className="hint">{form.date && !marketDay(form.date, holidayCalendar).open ? 'Not a trading day.' : 'Trading day.'}</span>
+          </label>
+          <label className="field">
+            <span>Time (IST, to the second)</span>
+            <input type="time" step="1" value={form.time} onChange={(e) => set({ time: e.target.value })} required />
+            <span className="order-quick">
+              {QUICK_TIMES.map((t) => <button key={t} type="button" className="btn ghost" onClick={() => set({ time: t })}>{t}</button>)}
+              <button type="button" className="btn ghost" onClick={nextMinute}>Next minute</button>
+            </span>
+          </label>
+        </div>
+        <div className="order-submit">
+          <span className="order-summary">{summary}</span>
+          <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Scheduling…' : 'Schedule order'}</button>
+        </div>
+      </form>
+
+      <h3 className="report-heading">Waiting ({pending.length})</h3>
+      {pending.length ? (
+        <div className="table-wrap">
+          <table className="stock-table">
+            <thead><tr><th>Sends at</th><th className="num">In</th><th>Order</th><th>Status</th><th /></tr></thead>
+            <tbody>
+              {pending.map((o) => (
+                <tr key={o.id}>
+                  <td>{when(o.triggerAt)}</td>
+                  <td className="num">{countdown(new Date(o.triggerAt) - now)}</td>
+                  <td>
+                    <span className={o.side === 'BUY' ? 'adv-text' : 'dec-text'}>{o.side}</span> {o.quantity} <span className="mono">{o.symbol}</span>{' '}
+                    {o.orderType === 'LIMIT' ? `limit ${rs(o.price)}` : 'market'} · {o.product} <span className="hint">{o.id}</span>
+                  </td>
+                  <td><span className={`badge ${STATUS_CLASS[o.status]}`}>{o.status === 'placing' ? 'sending…' : 'scheduled'}</span></td>
+                  <td>{o.status === 'scheduled' && <button type="button" className="btn danger" onClick={() => cancel(o)}>Cancel</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="hint">No orders waiting.</p>}
+
+      <h3 className="report-heading">History</h3>
+      {history.length ? (
+        <div className="table-wrap tall">
+          <table className="stock-table">
+            <thead><tr><th>Time</th><th>Order</th><th>Result</th><th>Details</th></tr></thead>
+            <tbody>
+              {history.map((o) => (
+                <tr key={o.id}>
+                  <td>{when(o.triggerAt)}</td>
+                  <td>
+                    <span className={o.side === 'BUY' ? 'adv-text' : 'dec-text'}>{o.side}</span> {o.quantity} <span className="mono">{o.symbol}</span>{' '}
+                    {o.orderType === 'LIMIT' ? `limit ${rs(o.price)}` : 'market'} · {o.product}
+                  </td>
+                  <td><span className={`badge ${STATUS_CLASS[o.status]}`}>{o.status}</span></td>
+                  <td className="wrap-cell order-detail">
+                    {o.status === 'placed'
+                      ? `Kite order ${o.result?.orderId ?? '—'} sent ${o.result?.latencyMs != null ? `${o.result.latencyMs} ms after the time` : ''}. Check fills in Kite.`
+                      : o.result?.error ?? (o.status === 'cancelled' ? 'Cancelled before its time.' : '')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="hint">Nothing yet.</p>}
+    </div>
+  );
+}

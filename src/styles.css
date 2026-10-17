@@ -543,6 +543,55 @@ body {
     var(--safe-area-inset-bottom, 0px) var(--safe-area-inset-left, 0px);
 }
 
+/* Market signals strip (GIFT Nifty, India VIX, FII/DII) */
+.market-signals { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 18px 0 0; }
+.market-signal { padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 0.85rem; cursor: help; }
+.market-signal.on { border-color: var(--accent); }
+.market-signal-label { color: var(--muted); }
+
+/* Stocks table download */
+.export-actions { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; }
+.export-actions .hint { font-size: 0.78rem; }
+
+/* 9:15 confirmation */
+.confirm-card strong { display: block; margin-bottom: 8px; }
+.confirm-tier { margin-top: 6px; }
+.confirm-tier .subhead { margin: 10px 0 0; }
+.confirm-blend { grid-template-columns: minmax(170px, 1.2fr) minmax(120px, 1fr) 150px; grid-template-areas: "toggle slider share" "help help help"; border-top: 1px solid var(--border); }
+@media (max-width: 600px) {
+  .confirm-blend { grid-template-columns: 1fr 90px; grid-template-areas: "toggle share" "slider slider" "help help"; }
+}
+.confirm-card { overflow-x: auto; }
+.confirm-checks { white-space: nowrap; }
+.check { display: inline-block; width: 18px; text-align: center; font-weight: 700; cursor: help; }
+.check.pass { color: var(--green); }
+.check.fail { color: var(--red); }
+.check.neutral { color: var(--muted); }
+.check.warn { color: var(--amber); }
+.confirm-plan { white-space: nowrap; }
+.confirm-trig { margin-left: 6px; font-size: 0.7rem; }
+
+/* Scheduled orders */
+.order-form { margin-top: 16px; }
+.order-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 0 18px; align-items: start; }
+.order-grid .field { margin: 10px 0; }
+.segmented { display: flex; gap: 6px; }
+.segmented .btn { flex: 1; }
+.btn.trade.active.buy { background: var(--green); color: #04140a; }
+.btn.trade.active.sell { background: var(--red); color: #1a0505; }
+.order-quick { display: flex; flex-wrap: wrap; gap: 4px; }
+.order-quick .btn { padding: 3px 8px; font-size: 0.75rem; }
+.order-submit { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px; }
+.order-summary { font-weight: 600; }
+.order-detail { max-width: 520px; }
+.confirm-schedule { padding: 3px 8px; font-size: 0.75rem; white-space: nowrap; }
+
+/* Report card */
+.report-heading { margin: 26px 0 10px; font-size: 1rem; }
+.report-card .bias-card strong { display: block; margin-bottom: 8px; }
+.report-picks { min-width: 220px; }
+.report-pick { display: inline-block; margin: 1px 10px 1px 0; white-space: nowrap; }
+
 /* Settings: cards flow into columns on wide screens instead of stretching. */
 .settings-grid {
   display: grid;

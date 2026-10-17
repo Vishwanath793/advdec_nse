@@ -1,4 +1,5 @@
 import { DEFAULT_FACTOR_SETTINGS, FACTOR_DEFAULTS_VERSION, migrateFactorSettings } from './utils/conviction.js';
+import { DEFAULT_CHECK_SETTINGS, DEFAULT_TRADE_BLEND } from './utils/confirmation.js';
 
 const SETTINGS_KEY = 'ad_settings_v1';
 const SESSION_KEY = 'ad_kite_session_v1';
@@ -33,6 +34,8 @@ export const DEFAULT_SETTINGS = {
   tradeableOnly: true,       // top gainers/losers: hide T2T series and circuit-locked stocks
   convictionFactors: DEFAULT_FACTOR_SETTINGS, // { key: { on, weight } } for the conviction score
   convictionFactorsVersion: FACTOR_DEFAULTS_VERSION, // which default weights convictionFactors started from
+  confirmChecks: DEFAULT_CHECK_SETTINGS, // 9:15 Confirm: { key: { on, weight } } per check
+  confirmBlend: DEFAULT_TRADE_BLEND * 100, // trade score: % from the 9:20 confirmation (rest: 9:08 conviction)
   maxResults: 50,
 };
 

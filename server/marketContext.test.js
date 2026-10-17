@@ -25,7 +25,10 @@ test('previous trading days skip weekends and NSE holidays', () => {
 test('end-of-day files give yesterday\'s range and average volume', () => {
   const day1 = { date: '2026-10-09', rows: parseBhavcopy(bhav([['HCLTECH', 1230, 1200, 1216.7, 3000000]])) };
   const day2 = { date: '2026-10-12', rows: parseBhavcopy(bhav([['HCLTECH', 1236.8, 1206, 1223, 2000000], ['HCLTECH', 9, 9, 9, 9, 'BL']])) };
-  assert.deepEqual(historyStats([day1, day2]).HCLTECH, { prevHigh: 1236.8, prevLow: 1206, prevClose: 1223, avgVolume: 2500000, volumeDays: 2 });
+  assert.deepEqual(historyStats([day1, day2]).HCLTECH, {
+    prevHigh: 1236.8, prevLow: 1206, prevClose: 1223, avgVolume: 2500000, volumeDays: 2,
+    prevDelivery: 1, avgDelivery: null, close1: 1216.7, close5: null, close20: null,
+  });
   assert.throws(() => parseBhavcopy('A,B\n1,2'), /Unexpected end-of-day file format/);
 });
 

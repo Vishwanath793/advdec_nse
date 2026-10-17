@@ -6,6 +6,9 @@ import calendar from '../../server/tv/holidays.json';
 import { createPriceBandService } from '../core/priceBands.js';
 import { createMarketContextService } from '../core/marketContext.js';
 import { createKiteClient } from '../core/kite.js';
+import { createRecorder } from '../core/recorder.js';
+import { createOrderScheduler } from '../core/orderScheduler.js';
+import { parseCSV, rowsToObjects } from '../utils/csv.js';
 import { createPhonePreopen } from './phonePreopen.js';
 
 /**
@@ -37,9 +40,10 @@ export async function nativeFetch(url, init = {}) {
     method: init.method ?? 'GET',
     headers,
     data,
-    responseType: 'text',
+    // Binary files (zips) come back base64-encoded with 'arraybuffer'.
+    responseType: init.binary ? 'arraybuffer' : 'text',
     connectTimeout: 25_000,
-    readTimeout: 25_000,
+    readTimeout: 40_000,
   });
   const lower = Object.fromEntries(Object.entries(response.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
   const text = () => (typeof response.data === 'string' ? response.data : JSON.stringify(response.data ?? ''));
@@ -49,6 +53,12 @@ export async function nativeFetch(url, init = {}) {
     headers: { get: (name) => lower[name.toLowerCase()] ?? null },
     text: async () => text(),
     json: async () => (typeof response.data === 'string' ? JSON.parse(response.data) : response.data),
+    async arrayBuffer() {
+      const binary = atob(typeof response.data === 'string' ? response.data : '');
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    },
   };
 }
 
@@ -95,10 +105,25 @@ const notifier = {
 export function createAndroidApi() {
   const store = deviceStore();
   const fetchImpl = nativeFetch;
-  const preopen = createPhonePreopen({ store, fetchImpl, calendar, notifier });
   const priceBands = createPriceBandService({ store, fetchImpl });
   const context = createMarketContextService({ store, fetchImpl, calendar });
+  const recorder = createRecorder({
+    store,
+    calendar,
+    context,
+    inputs: async () => ({
+      // Uploaded list, else the bundled one (same fallback as the UI).
+      masterRows: (await store.read('master-stock.json'))?.rows
+        ?? rowsToObjects(parseCSV(await (await fetch('/master_stock.csv')).text())),
+      secList: await priceBands.get().catch(() => null),
+      ...await context.get().then((c) => ({ events: c.events, market: c.market })).catch(() => ({})),
+    }),
+  });
+  const preopen = createPhonePreopen({ store, fetchImpl, calendar, notifier, onSnapshot: (s) => recorder.record(s) });
   const kite = createKiteClient({ fetchImpl });
+  const orderScheduler = createOrderScheduler({ store, calendar, placeOrder: (args) => kite.placeOrder(args) });
+  orderScheduler.load().catch(() => {});
+  preopen.snapshot().then((s) => s && recorder.record(s)).catch(() => {});
 
   // Replaces the backend's cron jobs: check on start, on resume and while open.
   const tick = () => preopen.tick().catch(() => {});
@@ -136,7 +161,40 @@ export function createAndroidApi() {
       saveSchedule: (config) => preopen.update(config),
     },
     priceBands: { get: () => priceBands.get() },
-    context: { get: () => context.get() },
+    context: { get: (date = null) => context.get({ date }) },
+    files: {
+      /** Saves into Documents/AdvDec on the phone (visible in the Files app). */
+      async save(name, bytes) {
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        await Filesystem.writeFile({ path: `AdvDec/${name}`, data: btoa(binary), directory: Directory.Documents, recursive: true });
+        return `Documents/AdvDec/${name}`;
+      },
+    },
+    // No backend on the phone: the app itself saves the 9:30 file while open (see App.jsx).
+    exports: null,
+    // On the phone, orders are sent by the app itself, so it must be open at the trigger time.
+    scheduledOrders: {
+      runsInBackground: false,
+      list: async () => ({ orders: await orderScheduler.list(), session: orderScheduler.sessionStatus() }),
+      async add(order) {
+        const { order: o, warnings } = await orderScheduler.add(order);
+        return { order: o, warnings, orders: await orderScheduler.list(), session: orderScheduler.sessionStatus() };
+      },
+      async cancel(id) {
+        await orderScheduler.cancel(id);
+        return { orders: await orderScheduler.list(), session: orderScheduler.sessionStatus() };
+      },
+      setSession: async (s) => orderScheduler.setSession(s),
+    },
+    confirm: {
+      get: (date) => recorder.confirmation(date),
+      save: (reading) => recorder.saveConfirmation(reading),
+    },
+    reportCard: {
+      status: () => recorder.status(),
+      get: (factorSettings) => recorder.report(factorSettings),
+    },
     kite,
   };
 }
