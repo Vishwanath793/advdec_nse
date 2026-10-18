@@ -20,6 +20,11 @@ import { istInstant } from '../core/calendar.js';
  *   FLAT     small gap, chop, weak volume (no trade)
  * Also included: duplicate packets, an out-of-order tick and a tick stamped
  * exactly 09:20:00 (which must not count).
+ *
+ * After 09:20 (`after`, for the paper-trading replay): ORBUP breaks out and runs
+ * through both targets; MOMO triggers, then falls back through its stop. The
+ * others drift near their 09:20 price. Uses no extra random draws, so the
+ * 09:15–09:20 window is unchanged.
  */
 
 export const SIMULATED_DATE = '2026-10-19'; // a Monday in the 2026 NSE calendar
@@ -31,12 +36,12 @@ function rng(seed) {
 
 const SCENARIOS = [
   // symbol, sector, prevClose, gap%, keyframes [sec from 09:15, % from open], vol/min (×avg opening rate), spread bps, depth size, fno
-  { symbol: 'ORBUP', sector: 'Information Technology', prev: 1000, gap: 1.5, path: [[0, 0], [60, 0.3], [120, 0.2], [180, 0.6], [240, 0.9], [299, 1.2]], vol: 2.2, spread: 4, size: 4000, buyBias: 0.62 },
+  { symbol: 'ORBUP', sector: 'Information Technology', prev: 1000, gap: 1.5, path: [[0, 0], [60, 0.3], [120, 0.2], [180, 0.6], [240, 0.9], [299, 1.2]], vol: 2.2, spread: 4, size: 4000, buyBias: 0.62, after: [[340, 1.6], [420, 2.6], [480, 3.4], [560, 4.4], [600, 5.6]] },
   { symbol: 'ORBDN', sector: 'Metals & Mining', prev: 500, gap: -1.8, path: [[0, 0], [60, -0.4], [120, -0.3], [180, -0.8], [240, -1.1], [299, -1.4]], vol: 2.0, spread: 5, size: 6000, buyBias: 0.38 },
   { symbol: 'FAKEOUT', sector: 'Information Technology', prev: 800, gap: 1.2, path: [[0, 0], [60, 0.8], [100, 1.1], [160, 0.2], [240, -0.4], [299, -0.5]], vol: 1.6, spread: 6, size: 3000, buyBias: 0.45 },
   { symbol: 'GAPPULL', sector: 'Capital Goods', prev: 200, gap: 4.5, path: [[0, 0], [40, 0.6], [110, -1.6], [170, -1.2], [230, 0.1], [299, 0.9]], vol: 2.6, spread: 6, size: 8000, buyBias: 0.58 },
   { symbol: 'DEADCAT', sector: 'Capital Goods', prev: 300, gap: 4.2, path: [[0, 0], [50, -1.5], [120, -2.6], [190, -2.1], [250, -2.4], [299, -2.5]], vol: 0.9, spread: 8, size: 5000, buyBias: 0.4 },
-  { symbol: 'MOMO', sector: 'Automobile and Auto Components', prev: 1500, gap: 0.9, path: [[0, 0], [60, 0.3], [120, 0.6], [180, 0.9], [240, 1.2], [299, 1.45]], vol: 3.1, spread: 3, size: 3500, buyBias: 0.64 },
+  { symbol: 'MOMO', sector: 'Automobile and Auto Components', prev: 1500, gap: 0.9, path: [[0, 0], [60, 0.3], [120, 0.6], [180, 0.9], [240, 1.2], [299, 1.45]], vol: 3.1, spread: 3, size: 3500, buyBias: 0.64, after: [[330, 1.7], [400, 1.0], [480, 0.3], [540, -0.4], [600, -0.6]] },
   { symbol: 'OVEREXT', sector: 'Information Technology', prev: 600, gap: 2.0, path: [[0, 0], [60, 1.2], [120, 2.3], [180, 3.1], [240, 3.7], [299, 4.0]], vol: 3.5, spread: 5, size: 3000, buyBias: 0.6 },
   { symbol: 'ILLIQ', sector: 'Realty', prev: 90, gap: 1.6, path: [[0, 0], [90, 0.5], [180, 0.9], [299, 1.0]], vol: 0.4, spread: 80, size: 150, buyBias: 0.55, sparse: 8 },
   { symbol: 'STALE', sector: 'Fast Moving Consumer Goods', prev: 400, gap: 1.1, path: [[0, 0], [60, 0.4], [90, 0.5]], vol: 1.2, spread: 6, size: 3000, buyBias: 0.55, stopAt: 90 },
@@ -119,7 +124,8 @@ export function simulatedMorning({ date = SIMULATED_DATE, seed = 920 } = {}) {
     ticks.push({ tick: preTick, receivedAt: open - 19_950 });
     for (let sec = 0; sec <= end; sec += step) {
       const at = open + sec * 1000;
-      const drift = interp(sc.path, Math.min(sec, 299)) + (sec > 299 ? (r() - 0.5) * 0.2 : 0);
+      const base = sec > 299 && sc.after ? interp([[299, sc.path.at(-1)[1]], ...sc.after], sec) : interp(sc.path, Math.min(sec, 299));
+      const drift = base + (sec > 299 ? (r() - 0.5) * (sc.after ? 0.04 : 0.2) : 0);
       let ltp = sc.locked ? upper : tick2(openPrice * (1 + (drift + (r() - 0.5) * 0.08) / 100));
       if (!sc.locked && ltp > upper) ltp = upper;
       high = Math.max(high, ltp);

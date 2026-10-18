@@ -25,6 +25,7 @@ import TvResearchPage from './TvResearchPage.jsx';
 import ReportCardPage from './ReportCardPage.jsx';
 import ConfirmPage from './ConfirmPage.jsx';
 import OrdersPage from './OrdersPage.jsx';
+import { ModeBadge } from './TradingPanel.jsx';
 import { formatIST } from './NseScheduleSettings.jsx';
 import { loadSettings, saveSettings, loadSession, saveSession } from './store.js';
 
@@ -980,6 +981,7 @@ export default function App() {
         <a href="#/settings" className={`nav-link ${page === 'settings' ? 'active' : ''}`}>
           Settings
         </a>
+        <ModeBadge />
         <span className={`badge nav-kite ${session ? 'advance' : 'unchanged'}`}>
           {session ? `Kite: ${session.user_name || session.user_id}` : 'Kite: not connected'}
         </span>

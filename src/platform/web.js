@@ -92,6 +92,15 @@ export function createWebApi() {
       selfTest: () => json(fetch('/api/opening/selftest', { method: 'POST' })),
       saveSettings: (body) => json(post('/api/opening/settings', body, 'PUT')),
     },
+    /** The 09:20 decision and paper trading (milestone 2: PAPER only; LIVE is not available). */
+    trading: {
+      state: (ledger = 'day') => json(fetch(`/api/trading/state?ledger=${ledger}`)),
+      decision: (symbol, ledger = 'day') => json(fetch(`/api/trading/decision/${encodeURIComponent(symbol)}?ledger=${ledger}`)),
+      saveSettings: (body) => json(post('/api/trading/settings', body, 'PUT')),
+      kill: (on, ledger = 'day') => json(post('/api/trading/kill', { on, ledger })),
+      closeAll: (ledger = 'day') => json(post('/api/trading/close-all', { ledger })),
+      logUrl: (date) => `/api/trading/log/${date}`,
+    },
     /** Live prices from NSE (fallback when Kite has no market data), in Kite's quote shape. */
     live: { quote: (instruments) => json(post('/api/nse/live', { instruments })) },
     /** Time-triggered orders, sent by the backend (the browser can be closed). */

@@ -168,6 +168,7 @@ export function createAndroidApi() {
     live: { quote: (instruments) => nseLive.quote(instruments) },
     // The WebSocket collector runs in the PC backend; the phone keeps /quote polling (milestone 1).
     opening: null,
+    trading: null, // paper trading runs on the desktop backend; the phone never places orders
     files: {
       /** Saves into Documents/AdvDec on the phone (visible in the Files app). */
       async save(name, bytes) {

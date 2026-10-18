@@ -370,3 +370,162 @@ export function confirmationReading(stocks, quotes, now, date, { checkSettings =
 export const STATUS_LABEL = {
   confirmed: 'Confirmed', mixed: 'Mixed', failing: 'Failing', failed: 'Gap filled', avoid: 'Avoid', 'no-data': 'No quote',
 };
+
+/*
+ * ── 09:20 opening-window score (milestone 2) ────────────────────────────────
+ * The same idea as confirmSetup (pass 1, neutral/caution ½, fail 0, weighted),
+ * computed from the sealed Kite WebSocket features for one direction and one
+ * strategy. Factors are grouped; the group weights are a preset:
+ *   unit      every available factor counts the same (the default, like the checks above)
+ *   research  price action 20, opening-range setup 20, relative volume 20,
+ *             depth 15, F&O 10, sector/benchmark 10, feasibility 5
+ * Factors whose data is missing are left out (never invented) and the
+ * remaining weights are rescaled; `coverage` says how much was scored.
+ * A hard rejection always wins over the score.
+ */
+export const OPENING_GROUPS = [
+  { key: 'price', label: 'Price action', research: 20 },
+  { key: 'range', label: 'Opening-range setup', research: 20 },
+  { key: 'volume', label: 'Relative volume', research: 20 },
+  { key: 'depth', label: 'Market depth', research: 15 },
+  { key: 'fo', label: 'F&O', research: 10 },
+  { key: 'market', label: 'Sector and benchmark', research: 10 },
+  { key: 'feasibility', label: 'Feasibility', research: 5 },
+];
+export const SCORE_PRESETS = { unit: 'Every factor counts the same', research: 'Research group weights (20/20/20/15/10/10/5)' };
+export const DEFAULT_SCORE_PRESET = 'unit';
+/** Optional reading of a score. Trading needs at least `minScore` (CONFIRMED_SCORE by default). */
+export const SCORE_TIERS = [
+  { key: 'strong', label: 'Strong', min: 85 },
+  { key: 'watchlist', label: 'Watchlist', min: CONFIRMED_SCORE },
+  { key: 'weak', label: 'Weak', min: 50 },
+  { key: 'reject', label: 'Reject', min: -Infinity },
+];
+export const scoreTier = (score) => (score == null ? null : SCORE_TIERS.find((t) => score >= t.min).key);
+export const MIN_OPENING_TICKS = 5;
+
+const SRC = {
+  ws: 'Kite WebSocket (full mode), 09:15–09:20',
+  ohlc: 'Kite WebSocket: the day open/high/low at 09:20',
+  candles: 'Minute candles built from sampled ticks (approximate)',
+  vwap: 'Kite average traded price (the day VWAP Kite reports)',
+  depth: 'Kite five-level market depth (pending orders, not trades)',
+  hist: 'Kite historical candles (opening volume averaged over up to 10 days; ATR 14 days)',
+  prev: 'NSE previous-day high/low/close (Kite close when they differ)',
+  fo: 'Kite WebSocket: near-month future price and open interest',
+  index: 'Kite WebSocket: index ticks since 09:15',
+  circuit: 'Kite /quote circuit limits (checked before the open)',
+  plan: 'Trade plan: tick-rounded levels, slippage and Zerodha charges',
+};
+const pctTxt = (n) => (n == null || !Number.isFinite(n) ? 'n/a' : `${n.toFixed(2)}%`);
+const numTxt = (n, d = 2) => (n == null || !Number.isFinite(n) ? 'n/a' : n.toFixed(d));
+
+/** Every factor for one direction. Each is { group, key, label, result (null = unavailable), detail, source }. */
+export function openingFactors(f, { direction, strategy = null, plan = null, minRewardRisk = 1.5, maxSpreadBps = 25 } = {}) {
+  const dir = direction > 0 ? 1 : -1;
+  const out = [];
+  const add = (group, key, label, result, detail, source) => out.push({ group, key, label, result, detail, source });
+  const band = (v, good, ok) => (v == null ? null : v >= good ? 'pass' : v >= ok ? 'warn' : 'fail');
+  const side = (v, flat = 0) => (v == null ? null : v > flat ? 'pass' : v >= -flat ? 'neutral' : 'fail');
+
+  // Price action
+  add('price', 'holdOpen', 'Holding the open', f.ltp != null && f.open ? side((dir * (f.ltp - f.open) / f.open) * 100, 0.05) : null,
+    `last ${numTxt(f.ltp)} vs open ${numTxt(f.open)} (${pctTxt(f.ret5Pct)})`, SRC.ohlc);
+  const pos = f.closePos == null ? null : dir > 0 ? f.closePos : 1 - f.closePos;
+  add('price', 'closePos', 'Close near the range extreme', band(pos, 0.7, 0.4), pos == null ? 'no range' : `close at ${Math.round(f.closePos * 100)}% of the 09:15–09:20 range`, SRC.ohlc);
+  const wick = dir > 0 ? f.upperWickPct : f.lowerWickPct;
+  add('price', 'candle', 'Five-minute candle', f.bodyPct == null || wick == null ? null : dir * (f.ltp - f.open) <= 0 ? 'fail' : wick <= 30 ? 'pass' : 'warn',
+    `body ${pctTxt(f.bodyPct)} of the range, ${dir > 0 ? 'upper' : 'lower'} wick ${pctTxt(wick)}`, SRC.ohlc);
+  add('price', 'vwap', `${dir > 0 ? 'Above' : 'Below'} VWAP`, f.vwap ? (dir * (f.ltp - f.vwap) > 0 ? 'pass' : 'fail') : null,
+    `${pctTxt(f.vwapDistPct)} from VWAP ${numTxt(f.vwap)}; crossed ${f.vwapCrosses ?? 0} times`, SRC.vwap);
+  const mr = (f.minuteReturns ?? []).filter((r) => r != null);
+  const same = mr.filter((r) => Math.sign(r) === dir).length;
+  add('price', 'consistency', 'Consistent minutes', mr.length ? (same >= 4 ? 'pass' : same >= 3 ? 'warn' : 'fail') : null, `${same} of ${mr.length} minutes ${dir > 0 ? 'up' : 'down'}`, SRC.candles);
+
+  // Opening-range setup
+  if (strategy) {
+    const done = strategy.checks.filter((c) => c.ok).length;
+    const ratio = strategy.checks.length ? done / strategy.checks.length : 0;
+    add('range', 'setup', `${strategy.label} checks`, strategy.pass ? 'pass' : ratio >= 0.7 ? 'warn' : 'fail', `${done} of ${strategy.checks.length} checks pass`, 'The strategy rules (utils/strategies.js)');
+  }
+  add('range', 'rangeAtr', 'Range width vs ATR', f.orRangeAtr == null ? null : f.orRangeAtr >= 0.15 && f.orRangeAtr <= 1.2 ? 'pass' : 'fail', `${numTxt(f.orRangeAtr)}× the 14-day ATR`, SRC.hist);
+  const beyond = dir > 0 ? f.distPrevHighPct : f.distPrevLowPct;
+  add('range', 'prevDay', `Beyond the previous day ${dir > 0 ? 'high' : 'low'}`, beyond == null ? null : dir * beyond > 0 ? 'pass' : 'neutral',
+    `${pctTxt(beyond)} from the previous day ${dir > 0 ? 'high' : 'low'}`, SRC.prev);
+  if (f.gapPct != null && Math.sign(f.gapPct) === dir && Math.abs(f.gapPct) >= 0.25) {
+    add('range', 'gapHeld', 'Gap not filled', dir * (f.ltp - f.prevClose) > 0 ? 'pass' : 'fail', `gap ${pctTxt(f.gapPct)}, last ${numTxt(f.ltp)} vs previous close ${numTxt(f.prevClose)}`, SRC.prev);
+  }
+
+  // Relative volume
+  add('volume', 'rvol', 'Relative volume', band(f.rvol, 1.5, 1), f.rvol == null ? 'no historical 09:15–09:20 volume' : `${numTxt(f.rvol)}× the usual opening volume`, SRC.hist);
+  add('volume', 'volAccel', 'Volume building', band(f.volAccel, 1.1, 0.8), `${numTxt(f.volAccel)}× (last two minutes vs the first three)`, SRC.candles);
+
+  // Depth
+  const d = f.depth;
+  add('depth', 'imbalance', 'Book on the right side', d ? band(dir * d.imbalance5, 0.1, -0.1) : null, d ? `top-5 imbalance ${numTxt(d.imbalance5)}` : 'no order book', SRC.depth);
+  add('depth', 'spread', 'Spread', d ? (d.spreadBps <= 10 ? 'pass' : d.spreadBps <= maxSpreadBps ? 'warn' : 'fail') : null,
+    d ? `${numTxt(d.spreadBps, 1)} bps (mean ${numTxt(d.spreadBpsMean, 1)})` : 'no order book', SRC.depth);
+  add('depth', 'stability', 'Book stability', d ? band(d.stability, 0.6, 0.4) : null, d ? `stability ${numTxt(d.stability)}` : 'no order book', SRC.depth);
+  add('depth', 'liquidityDrop', 'Liquidity not draining', d?.liquidityDropPct == null ? null : d.liquidityDropPct >= -30 ? 'pass' : d.liquidityDropPct >= -60 ? 'warn' : 'fail',
+    `top-5 value ${pctTxt(d?.liquidityDropPct)} vs the window median`, SRC.depth);
+  const impact = d ? (dir > 0 ? d.impactBuyBps : d.impactSellBps) : null;
+  add('depth', 'impact', 'Impact cost', impact == null ? null : impact <= 10 ? 'pass' : impact <= 25 ? 'warn' : 'fail',
+    `${numTxt(impact, 1)} bps to ${dir > 0 ? 'buy' : 'sell'} ₹${(d?.impactNotional ?? 0).toLocaleString('en-IN')}`, SRC.depth);
+
+  // F&O (only stocks with a future, and only from real data)
+  const fo = f.fo && !f.fo.missing ? f.fo : null;
+  const goodBuild = dir > 0 ? ['long build-up', 'short covering'] : ['short build-up', 'long unwinding'];
+  add('fo', 'build', 'Futures open interest', fo?.build == null ? null : fo.build === goodBuild[0] ? 'pass' : fo.build === goodBuild[1] || fo.build === 'neutral' ? 'warn' : 'fail',
+    fo ? `${fo.build ?? 'no reading'} (OI ${pctTxt(fo.oiChangePct)})` : f.fo?.missing ?? 'not an F&O stock', SRC.fo);
+  add('fo', 'futAgrees', 'Future moving the same way', fo?.agrees == null ? null : fo.agrees ? 'pass' : 'fail', fo ? `future ${pctTxt(fo.retPct)}` : 'n/a', SRC.fo);
+
+  // Sector and benchmark
+  const m = f.market ?? {};
+  add('market', 'nifty', 'Nifty 50 agrees', m.nifty ? side(dir * m.nifty.pct, INDEX_MOVE_PCT) : null, m.nifty ? `Nifty 50 ${pctTxt(m.nifty.pct)} since 09:15` : 'no Nifty ticks', SRC.index);
+  add('market', 'sector', 'Sector index agrees', m.sector ? side(dir * m.sector.pct, INDEX_MOVE_PCT) : null, m.sector ? `${m.sector.symbol} ${pctTxt(m.sector.pct)}` : 'no sector index for this stock', SRC.index);
+  add('market', 'relative', 'Relative strength vs Nifty', m.relVsNiftyPct == null ? null : side(dir * m.relVsNiftyPct, REL_STRENGTH_PCT), `${pctTxt(m.relVsNiftyPct)} vs Nifty`, SRC.index);
+
+  // Feasibility
+  const limit = dir > 0 ? f.upperCircuit : f.lowerCircuit;
+  const room = limit && f.ltp ? (dir * (limit - f.ltp) / f.ltp) * 100 : null;
+  add('feasibility', 'circuitRoom', 'Room to the circuit', room == null ? null : room >= MIN_CIRCUIT_ROOM_PCT ? 'pass' : 'fail', `${pctTxt(room)} to ₹${limit ?? 'n/a'}`, SRC.circuit);
+  add('feasibility', 'rewardRisk', 'Reward/risk after costs', plan?.rewardRisk == null ? null : plan.rewardRisk >= minRewardRisk ? 'pass' : 'fail',
+    plan ? `${numTxt(plan.rewardRisk)} (min ${minRewardRisk})` : 'no plan', SRC.plan);
+  add('feasibility', 'fresh', 'Fresh data', f.quality ? (f.quality.stale ? 'fail' : 'pass') : null, f.quality ? `last tick ${f.quality.lastTickAgeSec ?? 'n/a'} s before 09:20` : 'n/a', SRC.ws);
+  return out;
+}
+
+/** The 09:20 score for one direction (and strategy, when given): { score, tier, preset, groups, factors, coverage }. */
+export function scoreOpening(f, options = {}) {
+  const preset = options.preset === 'research' ? 'research' : 'unit';
+  const factors = openingFactors(f, options);
+  const available = factors.filter((x) => x.result != null);
+  const groups = OPENING_GROUPS.map((g) => {
+    const own = available.filter((x) => x.group === g.key);
+    const score = own.length ? own.reduce((s, x) => s + RESULT_POINTS[x.result], 0) / own.length : null;
+    return { key: g.key, label: g.label, weight: preset === 'research' ? g.research : own.length, factors: own.length, score: score == null ? null : Math.round(score * 100) };
+  });
+  const counted = groups.filter((g) => g.score != null && g.weight > 0);
+  const total = counted.reduce((s, g) => s + g.weight, 0);
+  const score = total ? Math.round(counted.reduce((s, g) => s + g.weight * g.score, 0) / total) : null;
+  const full = preset === 'research' ? OPENING_GROUPS.reduce((s, g) => s + g.research, 0) : factors.length;
+  const coverage = full ? Math.round(((preset === 'research' ? total : available.length) / full) * 100) : 0;
+  return { score, tier: scoreTier(score), preset, groups, factors, coverage };
+}
+
+/**
+ * Reasons that rule a stock out at 09:20 whatever its score (fail closed):
+ * stale or too little data, no two-sided book, at a circuit limit, a partial
+ * window, and the 09:10 tradeability blocks.
+ */
+export function openingRejections(f, { direction = 0, partial = false } = {}) {
+  const reasons = [];
+  if (partial) reasons.push('the window was only partly collected (backend started after 09:15)');
+  if (!f.quality || f.quality.ticks < MIN_OPENING_TICKS) reasons.push(`too few ticks (${f.quality?.ticks ?? 0})`);
+  if (f.quality?.stale) reasons.push(`stale: last tick ${f.quality.lastTickAgeSec ?? '?'} s before 09:20`);
+  if (!f.depth || !(f.depth.bestBid > 0) || !(f.depth.bestAsk > 0)) reasons.push('no live two-sided order book');
+  if (f.upperCircuit && f.ltp >= f.upperCircuit && direction >= 0) reasons.push('at the upper circuit');
+  if (f.lowerCircuit && f.ltp <= f.lowerCircuit && direction <= 0) reasons.push('at the lower circuit');
+  for (const flag of f.flags ?? []) if (flag.severity === 'block') reasons.push(`${flag.label}: ${flag.detail ?? 'blocked at 09:10'}`);
+  return reasons;
+}

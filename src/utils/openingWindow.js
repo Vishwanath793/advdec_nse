@@ -262,6 +262,7 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
     const ret5 = pct(ltp, open);
     return {
       symbol: m.symbol, token, kind: 'stock', sector: m.sector ?? null, status: m.status ?? null,
+      tick: m.tick ?? null, lot: m.lot ?? 1, fno: Boolean(m.fno), flags: m.flags ?? [], convictionScore: m.convictionScore ?? null,
       prevClose, preOpenPrice: m.preOpenPrice ?? null, open, ltp,
       gapPct: pct(open, prevClose), ret5Pct: ret5,
       orHigh, orLow, orRangePct: pct(orHigh, orLow) != null && open ? (range / open) * 100 : null,

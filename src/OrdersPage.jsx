@@ -4,6 +4,7 @@ import { indiaDate, istInstant, marketDay } from './core/calendar.js';
 import holidayCalendar from '../server/tv/holidays.json';
 import { nextCheckDelay, ORDER_GRACE_MS, ORDER_WINDOW } from './core/orderScheduler.js';
 import { tickSize } from './utils/analysis.js';
+import { TradingPanel } from './TradingPanel.jsx';
 
 /** The Orders page re-sends the Kite session itself at most this often (normally the app does it). */
 const SHARE_RETRY_MS = 5 * 60_000;
@@ -159,6 +160,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
 
   return (
     <div className="orders-page">
+      <TradingPanel />
       <div className="section-head"><h2>Scheduled orders</h2></div>
       <p className="hint">
         Pick a stock, Buy or Sell, quantity, Market or Limit, and the exact second it should be sent to Kite.

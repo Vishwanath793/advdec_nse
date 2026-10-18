@@ -5,6 +5,7 @@ import { compactInstruments, instrumentIndex } from '../src/core/instruments.js'
 import { encodeTickerMessage } from '../src/core/kiteTicks.js';
 import { simulatedMorning } from '../src/utils/simulatedMorning.js';
 import { readCalendar } from './tv/calendar.js';
+import { createTradingDesk } from '../src/core/tradingDesk.js';
 
 const calendar = readCalendar();
 const DATE = '2026-10-19';
@@ -23,7 +24,7 @@ const NFO = [
   '21,1,AAA26OCTFUT,AAA,0,2026-10-27,0,0.05,500,FUT,NFO-FUT,NFO',
 ].join('\n');
 
-function harness({ start = ist('09:10:00'), candidatesDate = DATE, quoteError = null } = {}) {
+function harness({ start = ist('09:10:00'), candidatesDate = DATE, quoteError = null, trading = null } = {}) {
   let t = start;
   const timers = [];
   const sockets = [];
@@ -53,6 +54,7 @@ function harness({ start = ist('09:10:00'), candidatesDate = DATE, quoteError = 
     setTimer: (fn, ms) => { const h = { fn, at: t + ms }; timers.push(h); return h; },
     clearTimer: (h) => { const i = timers.indexOf(h); if (i >= 0) timers.splice(i, 1); },
     onUpdate: (u) => updates.push(u),
+    trading,
   });
   return {
     collector, store, files, sockets, logged, updates,
@@ -199,4 +201,49 @@ test('replaying the simulated morning seals all 13 stocks without Kite and write
   assert.equal(last.sealed, true);
   assert.ok(!h.files.has(`opening/${sim.date}.json`));
   assert.equal(h.collector.stockDetail('GAPPULL').candles.length, 5);
+});
+
+test('a replay hands the seal and the later ticks to the trading desk (replay ledger only)', async () => {
+  const files = new Map();
+  const deskStore = { read: async (n) => files.get(n) ?? null, write: async (n, v) => { files.set(n, v); } };
+  const desk = createTradingDesk({ store: deskStore, log: { append: () => assert.fail('the replay writes no log'), read: () => [] }, calendar });
+  const h = harness({ start: ist('16:00:00'), trading: desk });
+  h.collector.replay(simulatedMorning(), { speed: 50 });
+  await h.advanceTo(ist('16:00:30'));
+  const v = desk.view('replay');
+  assert.equal(v.decisions.length, 13);
+  assert.equal(v.ledgerState.trades, 2);
+  assert.equal(v.ledgerState.positions.every((p) => p.status === 'CLOSED'), true, 'everything closed by the end of the replay');
+  assert.equal(h.collector.status().message, 'Replay finished.');
+  assert.equal(files.size, 0);
+});
+
+test('live day: the desk gets the seal and later ticks; open paper positions keep streaming after 09:30', async () => {
+  const seen = { sealed: null, ticks: [] };
+  const trading = {
+    onSeal: async (s, o) => { seen.sealed = { date: s.date, ...o }; },
+    onTicks: (ticks, r, o) => { if (!o.replay) seen.ticks.push(...ticks.map((t) => t.token)); },
+    keepTokens: () => [11],
+  };
+  const h = harness({ trading });
+  h.collector.setSession({ apiKey: 'k', accessToken: 't' });
+  await h.collector.wake();
+  await h.advanceTo('09:14:00');
+  const ws = h.sockets[0];
+  ws.readyState = 1; ws.onopen();
+  await h.advanceTo(ist('09:20:00') + SEAL_GRACE_MS);
+  assert.deepEqual(seen.sealed, { date: DATE, replay: false });
+  await h.advanceTo(ist('09:21:00'));
+  ws.onmessage({ data: encodeTickerMessage([{ token: 11, ltp: 103, volume: 5, avgPrice: 103, buyQty: 1, sellQty: 1, open: 101, high: 103, low: 101, close: 100, exchangeTime: ist('09:21:00') }]).buffer });
+  assert.deepEqual(seen.ticks, [11]);
+  await h.advanceTo(ist('09:30:00') - 1);
+  const before = h.sockets.length; // the main ticker may have reconnected while the market was quiet
+  await h.advanceTo('09:30:00');
+  assert.ok(h.sockets.slice(0, before).every((x) => x.readyState === 3), 'the main connection is closed');
+  assert.equal(h.sockets.length, before + 1, 'a new connection follows the open position');
+  const follow = h.sockets.at(-1);
+  follow.readyState = 1; follow.onopen();
+  assert.deepEqual(follow.sent[0].v, [11]);
+  h.collector.unfollow();
+  assert.equal(follow.readyState, 3);
 });

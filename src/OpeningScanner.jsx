@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './platform/index.js';
+import OpeningChart from './OpeningChart.jsx';
 
 /**
- * The 09:15–09:20 opening-window scanner (milestone 1: read-only features, no
- * decisions). Data comes from the backend's Kite WebSocket collector over SSE.
+ * The 09:15–09:20 opening-window scanner and the 09:20 decisions (paper).
+ * Data comes from the backend's Kite WebSocket collector over SSE; the payload
+ * carries the trading view of the ledger shown (the replay's during a replay).
  */
 
 const PHASE = {
@@ -15,6 +17,9 @@ const f2 = (n, d = 2) => (n == null || !Number.isFinite(n) ? '—' : n.toFixed(d
 const sgn = (n, d = 2) => (n == null || !Number.isFinite(n) ? '—' : `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(d)}`);
 const tone = (n) => (n > 0 ? 'adv-text' : n < 0 ? 'dec-text' : '');
 const vol = (n) => (n == null ? '—' : n >= 1e5 ? `${(n / 1e5).toFixed(2)} L` : n.toLocaleString('en-IN'));
+const DECISION_CLASS = { BUY: 'advance', SELL: 'decline', 'NO TRADE': 'unchanged' };
+const STRAT = { orb: 'A · ORB', gapPullback: 'B · Gap pullback', momentum: 'C · Momentum' };
+const RESULT_MARK = { pass: '✓', warn: '~', neutral: '·', fail: '✗' };
 const time = (iso) => (iso ? new Date(iso).toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' }) : '');
 
 /** Where the opening-window figures come from. */
@@ -35,7 +40,8 @@ export default function OpeningScanner() {
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [sort, setSort] = useState('conviction');
+  const [sort, setSort] = useState('score');
+  const [decision, setDecision] = useState(null);
   const [check, setCheck] = useState(null); // Kite setup self-check result
 
   useEffect(() => {
@@ -49,11 +55,22 @@ export default function OpeningScanner() {
     api.opening.stock(selected).then(setDetail).catch(() => setDetail(null));
   }, [selected, data]);
 
+  const ledger = data?.trading?.ledger ?? 'day';
+  const decidedAt = data?.trading?.ledgerState?.decidedAt ?? null;
+  useEffect(() => {
+    if (!selected || !api.trading) { setDecision(null); return; }
+    api.trading.decision(selected, ledger).then(setDecision).catch(() => setDecision(null));
+  }, [selected, ledger, decidedAt]);
+  const decisions = useMemo(() => new Map((data?.trading?.decisions ?? []).map((x) => [x.symbol, x])), [data]);
+
   const rows = useMemo(() => {
     const list = [...(data?.rows ?? [])];
-    const key = { conviction: (r) => r.convictionScore ?? -1, gap: (r) => Math.abs(r.gapPct ?? 0), rvol: (r) => r.rvol ?? -1, ret: (r) => Math.abs(r.ret5Pct ?? 0) }[sort];
+    const traded = (r) => (decisions.get(r.symbol)?.decision ?? 'NO TRADE') !== 'NO TRADE';
+    const key = {
+      score: (r) => (decisions.has(r.symbol) ? (traded(r) ? 1000 : 0) + (decisions.get(r.symbol).score ?? 0) : r.convictionScore ?? -1),
+      conviction: (r) => r.convictionScore ?? -1, gap: (r) => Math.abs(r.gapPct ?? 0), rvol: (r) => r.rvol ?? -1, ret: (r) => Math.abs(r.ret5Pct ?? 0) }[sort];
     return list.sort((a, b) => key(b) - key(a));
-  }, [data, sort]);
+  }, [data, sort, decisions]);
 
   if (!api.opening) {
     return <p className="hint">On the phone, the opening window uses /quote polling below; the Kite WebSocket collector runs in the PC backend.</p>;
@@ -68,6 +85,7 @@ export default function OpeningScanner() {
         <h3 className="report-heading">Opening window 09:15–09:20 <SourceBadge source={st.phase === 'collecting' || st.phase === 'sealed' || st.phase === 'connecting' ? st.source : null} /></h3>
         <div className="export-actions">
           <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort by">
+            <option value="score">By 09:20 decision and score</option>
             <option value="conviction">By 09:08 conviction</option>
             <option value="gap">By gap size</option>
             <option value="ret">By 5-min move</option>
@@ -130,6 +148,10 @@ export default function OpeningScanner() {
                 <th className="num" title="Near-month future: OI change vs previous close">F&amp;O OI</th>
                 <th className="num" title="Sector index since its open">Sector</th>
                 <th>Data</th>
+                <th className="num" title="09:20 score (0–100) for the chosen strategy and direction; tiers 85+ strong, 70–84 watchlist, 50–69 weak">Score</th>
+                <th>Strategy</th>
+                <th>Decision</th>
+                <th>Reasons</th>
               </tr>
             </thead>
             <tbody>
@@ -148,15 +170,23 @@ export default function OpeningScanner() {
                   <td className="num" title={r.oiBuild ?? r.fnoMissing ?? ''}>{r.oiChangePct != null ? `${sgn(r.oiChangePct, 1)}%` : r.fnoMissing ? 'no data' : '—'}</td>
                   <td className={`num ${tone(r.sectorPct)}`} title={r.sectorIndex ?? ''}>{sgn(r.sectorPct)}</td>
                   <td>{r.stale ? <span className="badge decline" title="No tick for over 60 s, or none at all">stale</span> : <span className="hint">{r.ticks} ticks</span>}</td>
+                  <DecisionCells x={decisions.get(r.symbol)} />
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      {selected && detail && <OpeningDetail d={detail} onClose={() => setSelected(null)} />}
+      {data?.trading?.gapReport?.length > 0 && (
+        <p className="hint gap-report">
+          <strong>Gap-ups of 3.75% or more (strategy B, reported separately):</strong>{' '}
+          {data.trading.gapReport.map((g) => `${g.symbol} +${f2(g.gapPct, 1)}%: ${g.verdict}${g.decision && g.decision !== 'NO TRADE' ? ` (${g.decision})` : ''}`).join(' · ')}
+        </p>
+      )}
+      {selected && detail && <OpeningDetail d={detail} decision={decision} onClose={() => setSelected(null)} />}
       <p className="hint">
-        Read-only for now: no BUY / SELL decisions yet. Figures: gap from Kite&apos;s official open; volume since 09:15 with
+        Decisions are made once at 09:20 and traded on paper only (simulated fills at the bid/ask plus slippage);
+        the default is NO TRADE. Figures: gap from Kite&apos;s official open; volume since 09:15 with
         the pre-open auction excluded; VWAP is Kite&apos;s average traded price; imbalance and spread are pending orders
         in the visible five levels, not trades. Ticks stamped 09:20:00 or later never change the window. Click a stock
         for candles, the order book and F&amp;O.
@@ -165,13 +195,73 @@ export default function OpeningScanner() {
   );
 }
 
-function OpeningDetail({ d, onClose }) {
+function DecisionCells({ x }) {
+  if (!x) return <><td className="num">—</td><td /><td /><td /></>;
+  return (
+    <>
+      <td className="num" title={x.tier ?? ''}>{x.score ?? '—'}</td>
+      <td>{x.strategy ? STRAT[x.strategy] : '—'}</td>
+      <td><span className={`badge ${DECISION_CLASS[x.decision]}`}>{x.decision}</span></td>
+      <td className="reasons-cell" title={x.reasons.join('\n')}>{x.reasons[0] ?? (x.rank ? `ranked ${x.rank}` : '')}</td>
+    </>
+  );
+}
+
+function DecisionDetail({ x }) {
+  const p = x.plan;
+  return (
+    <div className="decision-detail">
+      <p>
+        <span className={`badge ${DECISION_CLASS[x.decision]}`}>{x.decision}</span>{' '}
+        {x.strategyLabel ? <strong>{x.strategyLabel}</strong> : 'No strategy setup'} · score <strong>{x.score ?? '—'}</strong> ({x.tier ?? 'n/a'}; {x.coverage}% of the factors had data)
+        {x.rank ? ` · ranked ${x.rank}` : ''}
+      </p>
+      {x.reasons.length > 0 && <ul className="reasons">{x.reasons.map((r) => <li key={r}>{r}</li>)}</ul>}
+      {p && (
+        <p className="hint">
+          {p.side} {p.qty} (half at T1: {p.firstExitQty}) · trigger {f2(p.trigger)} (expected fill {f2(p.expectedEntry)}, max {f2(p.maxEntry)}) · stop {f2(p.stop)} ·
+          T1 {f2(p.target1)} · T2 {f2(p.target2)} · risk ₹{f2(p.riskAmount, 0)} · costs ₹{f2(p.costs.total)} · reward/risk after costs {f2(p.rewardRisk)}
+          {x.signalNote ? <><br />{x.signalNote}</> : null}
+        </p>
+      )}
+      <table className="bias-table score-table">
+        <thead><tr><th>Group</th><th className="num">Weight</th><th className="num">Score</th></tr></thead>
+        <tbody>{x.groups.map((g) => <tr key={g.key}><td>{g.label}</td><td className="num">{g.weight}</td><td className="num">{g.score ?? 'no data'}</td></tr>)}</tbody>
+      </table>
+      <details>
+        <summary>Every factor and where it comes from</summary>
+        <table className="bias-table">
+          <tbody>
+            {x.factors.map((f) => (
+              <tr key={f.key}>
+                <td>{f.result ? RESULT_MARK[f.result] : '–'}</td><td>{f.label}</td><td>{f.result == null ? `not scored: ${f.detail}` : f.detail}</td><td className="hint">{f.source}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
+      <details>
+        <summary>Strategy checks</summary>
+        {x.strategies.map((s) => (
+          <div key={s.strategy}>
+            <strong>{s.label}</strong>: {s.applies ? (s.pass ? 'setup valid' : 'setup not valid') : `not applicable (${s.reason})`}
+            {s.applies && <ul className="reasons">{s.checks.map((c) => <li key={c.key}>{c.ok ? '✓' : '✗'} {c.label}: {c.detail}</li>)}</ul>}
+          </div>
+        ))}
+      </details>
+    </div>
+  );
+}
+
+function OpeningDetail({ d, decision, onClose }) {
   return (
     <div className="settings-card opening-detail">
       <div className="section-head">
         <h3 className="report-heading">{d.symbol} <span className="hint">{d.sector}</span></h3>
         <button type="button" className="btn ghost" onClick={onClose}>Close</button>
       </div>
+      <OpeningChart d={d} plan={decision?.plan ?? null} />
+      {decision ? <DecisionDetail x={decision} /> : <p className="hint">No 09:20 decision for this stock yet.</p>}
       <div className="opening-detail-grid">
         <div>
           <strong>1-minute candles</strong> <span className="hint">(highs/lows from sampled ticks: approximate)</span>

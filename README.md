@@ -16,9 +16,11 @@ Validation: `npm test` and `npm run build`.
 
 ## Opening window 09:15–09:20 (Kite WebSocket)
 
-Milestone 1 of the 09:20 trading system: **read-only data collection, no buy/sell decisions yet.** The PC backend
-collects the first five minutes over the Kite Connect WebSocket (full mode), seals the window at 09:20 and shows the
-features on the **9:15 Confirm** tab. Needs a Kite Connect plan with market data (WebSocket, quotes, historical).
+The PC backend collects the first five minutes over the Kite Connect WebSocket (full mode), seals the window at
+09:20, decides BUY / SELL / NO TRADE once, and trades the decisions **on paper only** (milestone 2). Everything is on
+the **9:15 Confirm** tab (scanner) and the **Orders** tab (trading panel). Needs a Kite Connect plan with market data
+(WebSocket, quotes, historical). The mode badge in the menu bar shows the mode on every page: **PAPER**. LIVE
+execution is milestone 4 and doesn't exist yet.
 
 ### Daily pre-market routine
 
@@ -74,6 +76,71 @@ features on the **9:15 Confirm** tab. Needs a Kite Connect plan with market data
 | Breadth (% above previous close / VWAP) | Calculated over the tracked universe only, labelled; separate from NSE's exchange-wide advance/decline |
 | Circuit limits, previous close check | Direct from Kite `/quote` before 09:15 |
 | Option chain / PCR | Not available from Kite as a chain; not built |
+| 09:20 score, strategy checks, trade plan, reward/risk, paper fills and P&L | Calculated (below) |
+| Brokerage, STT, exchange, SEBI, stamp duty, GST | Zerodha's published intraday equity charges (`src/utils/charges.js`, checked 18 Oct 2026; update when they change) |
+
+### 09:20 decision (paper trading, milestone 2)
+
+At the seal, every stock in the window goes through three strategies (`src/utils/strategies.js`, pure functions,
+every threshold editable in **Settings → 09:20 trading**):
+
+- **A. Opening-range breakout / breakdown**: close near the top (bottom) of the 09:15–09:20 range, RVOL, the VWAP
+  side, a sector not against it, range width 0.15–1.2× ATR, a tight spread. Entry one tick beyond the range; stop at
+  the other side (the midpoint for a wide range); targets 1.5R and 3R. Shorts are intraday (MIS) only.
+- **B. Gap-up pullback recovery** (gap of 3.75% or more): high, then a real pullback that doesn't fill the gap, then
+  a recovery back above VWAP on more volume than the selling. Weak volume or staying below VWAP reads as a
+  dead-cat bounce. Gap-ups get their own line under the scanner (real recovery / dead-cat bounce / gap filled /
+  no pullback yet).
+- **C. Opening momentum**: at least four of five minutes the same way, strong RVOL, close near the extreme, small
+  rejection wick, Nifty and sector aligned, a stable book. Rejected when already overextended (too far from VWAP,
+  too big a move, too wide a range). Entry right after 09:20 at the ask (bid for shorts).
+
+Each passing signal gets a **trade plan** (`tradePlan.js`): entry, stop, T1, T2 rounded to Kite's tick size;
+the maximum entry slippage; size = risk per trade ÷ stop distance (capped by capital × MIS leverage, whole lots);
+Zerodha charges; and reward/risk **after costs** (half exits at T1, the rest at T2).
+
+The **score** extends the Confirm page's weighted checks (`scoreOpening` in `confirmation.js`; pass 1, neutral or
+caution ½, fail 0). Factors are grouped into price action, opening-range setup, relative volume, depth, F&O,
+sector/benchmark and feasibility. The weights come from a preset: *every factor counts the same* (default), or
+*research groups* 20/20/20/15/10/10/5. A factor with no data (no future, no ATR) is left out and the rest rescaled;
+the coverage is shown. Tiers: 85+ strong, 70–84 watchlist, 50–69 weak, below 50 reject. A trade needs at least
+70 (configurable), a valid plan and **no hard rejection**. Stale data, too few ticks, no two-sided book, sitting at
+a circuit, a partial window (backend started after 09:15) and the 09:10 tradeability blocks always mean NO TRADE,
+whatever the score. Eligible stocks are ranked by score and fill the free slots under the risk limits; the rest are
+NO TRADE with the reason.
+
+**Risk defaults** (Settings): ₹1,00,000 capital, 0.25% risk per trade, 1% daily loss limit, 2 open positions,
+3 trades a day, minimum reward/risk 1.5 after costs, stop for the day after 2 losses in a row, MIS leverage 5,
+paper slippage 5 bps, maximum entry slippage 15 bps, maximum spread 25 bps, entries cancelled at 09:30, square-off
+at 15:10. With small risk per trade, costs are a large share of R (about ₹50 a round trip on ₹50,000), so many
+setups fail the after-cost reward/risk check. That is deliberate.
+
+**Paper fills** (`src/utils/paperLedger.js`) never use the last traded price:
+- **Entries** trigger when the last price crosses the trigger, as an exchange stop order does. They fill against
+  the opposite side of the five-level book plus slippage, level by level, only within the maximum entry price, so
+  a thin book gives a **partial fill**. A triggered entry beyond its limit waits, like a stop-loss limit order,
+  until the entry window ends. The daily-loss and losing-streak limits are checked again when an entry triggers;
+  if either is hit, the entry is rejected.
+- **Exits**: half at T1 (resting limit), then the stop moves to the entry price; the rest at T2. A stop exits at
+  the bid (ask) minus slippage, which can be worse than the stop price. Square-off at 15:10.
+- **Kill switch** (Orders tab): cancels pending entries, closes open positions at the bid/ask, blocks new trades.
+  **Square off all** closes everything now.
+- Open paper positions keep a WebSocket connection to their stocks after 09:30, until they close.
+
+None of this means a real stop or target would fill at the same price, and nothing here says the strategies make
+money: they are hypotheses to test on recorded mornings (milestone 3).
+
+**Records**: `.data/paper/YYYY-MM-DD.ndjson` is the append-only event log: decision, orders, triggers, fills,
+rejections, cancellations, exits, stop moves, kill switch. Download it from the Orders tab. `…/YYYY-MM-DD.json` is
+a snapshot and `…-decision.json` is the full decision (every factor, check and plan). After a restart the day is
+rebuilt from the log and compared with the snapshot (reconciliation; the log wins). Each order id is the day, stock
+and strategy, and a day is decided only once, so a restart never places an order twice. Without a decision by the
+end of the entry window, a restarted backend doesn't decide late.
+
+**Try it without Kite**: 9:15 Confirm → **Replay simulated morning**. It replays 13 scenarios (valid and invalid
+for every strategy). The paper trades go to a separate *Simulated replay* ledger, which is in memory only and never
+mixed with today's. Expected result: ORBUP and MOMO are bought; ORBUP exits at T1 and T2, MOMO at its stop. The
+rest are NO TRADE, each with a reason.
 
 ## TV research: Zee Business + CNBC Awaaz
 

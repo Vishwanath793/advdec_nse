@@ -5,7 +5,10 @@ import { createOpeningWindow } from '../utils/openingWindow.js';
 import { indexInstruments } from '../utils/confirmation.js';
 
 /**
- * The opening-window collector (milestone 1: read-only, no decisions).
+ * The opening-window collector. It only reads market data; the 09:20 decision and
+ * paper fills happen in the trading desk (`trading`: core/tradingDesk.js), which
+ * gets the seal, every later tick, and (after STOP_AT) a connection kept for the
+ * stocks with open paper positions (follow/unfollow).
  *
  * Daily timeline (IST, trading days only; unknown calendar years fail closed):
  *   after the 09:10 pre-open import   prepare(): universe, tokens, history, /quote check
@@ -46,13 +49,14 @@ export function scannerRow(f, candidate = {}) {
 export function createOpeningCollector({
   store, kite, instruments, history, calendar, getCandidates, tickLog = null,
   settings = () => DEFAULT_COLLECTOR_SETTINGS, WebSocketImpl = globalThis.WebSocket,
-  now = () => new Date(), setTimer = setTimeout, clearTimer = clearTimeout, onUpdate = () => {},
+  now = () => new Date(), setTimer = setTimeout, clearTimer = clearTimeout, onUpdate = () => {}, trading = null,
 }) {
   let session = null;
   let day = null; // { date, universe, meta, window, candidates, ticker, sealed, phase, message, source, ... }
   let timers = [];
   let lastPublish = 0;
   let publishTimer = null;
+  let follower = null; // a ticker kept for open paper positions after STOP_AT (or after a restart)
 
   const safe = (text) => redactSecrets(text, session?.accessToken, session?.apiKey);
   const status = () => ({
@@ -67,6 +71,8 @@ export function createOpeningCollector({
     sealedAt: day?.sealed?.sealedAt ?? null,
     partialFrom: day?.partialFrom ?? null,
     counters: day?.window?.counters?.() ?? null,
+    following: follower ? follower.status?.() ?? true : null,
+    tradingError: day?.tradingError ?? null,
   });
 
   function publish(force = false) {
@@ -120,6 +126,8 @@ export function createOpeningCollector({
           prevClose: s.prevClose, preOpenPrice: s.finalPrice, preOpenVolume: s.finalVolume ?? null,
           avgVolume: s.avgVolume ?? null, prevHigh: s.prevHigh ?? null, prevLow: s.prevLow ?? null,
           upperCircuit: s.upperCircuit ?? null, lowerCircuit: s.lowerCircuit ?? null, tick: e.tick, lot: e.lot, fno: s.band === 'none',
+          // 09:10 tradeability flags (T2T, circuit, surveillance, data) and conviction, for the 09:20 decision.
+          flags: (s.flags ?? []).map((f) => ({ key: f.key, label: f.label, severity: f.severity, detail: f.detail })), convictionScore: s.convictionScore ?? null,
         };
         universe.stocks.push({ symbol: s.symbol, token: e.token });
         const fut = cfg.includeFutures && s.band === 'none' ? ix.future(s.symbol) : null;
@@ -189,6 +197,7 @@ export function createOpeningCollector({
       onTicks: (ticks, receivedAt) => {
         if (tickLog && receivedAt <= at(day.date, RECORD_UNTIL)) tickLog.append(ticks, receivedAt);
         for (const t of ticks) day.window.ingest(t, receivedAt);
+        trading?.onTicks(ticks, receivedAt, { replay: false });
         publish();
       },
       onStatus: (s) => {
@@ -207,14 +216,34 @@ export function createOpeningCollector({
     day.sealed = { ...day.window.seal(+now()), partialFrom: day.partialFrom ?? null };
     day.phase = 'sealed';
     if (!day.replay) await store.write(`opening/${day.date}.json`, day.sealed);
+    try { await trading?.onSeal(day.sealed, { replay: false }); } catch (error) { day.tradingError = safe(`09:20 decision failed: ${error.message}`); }
     publish(true);
   }
 
   function stop() {
     day?.ticker?.close();
+    if (day) day.ticker = null;
+    const keep = day?.replay ? [] : trading?.keepTokens?.() ?? [];
+    if (keep.length) follow(keep);
     if (tickLog && !day?.replay) tickLog.close?.();
     if (day && day.phase !== 'error') setPhase(day.sealed ? 'sealed' : 'stopped');
   }
+
+  /** Keep streaming these tokens (open paper orders/positions) into the trading desk. */
+  function follow(tokens) {
+    if (!tokens?.length) return;
+    if (follower) { follower.subscribe(tokens, 'full'); return; }
+    if (!session?.accessToken) return;
+    follower = createKiteTicker({
+      ...session, WebSocketImpl, now: () => +now(), setTimer, clearTimer,
+      onTicks: (ticks, receivedAt) => trading?.onTicks(ticks, receivedAt, { replay: false }),
+      onStatus: () => publish(),
+    });
+    follower.subscribe(tokens, 'full');
+    follower.connect();
+    publish(true);
+  }
+  function unfollow() { follower?.close(); follower = null; publish(true); }
 
   /**
    * Timers for the rest of today: connect, seal, stop. Started late (after 09:15) the window is
@@ -254,13 +283,21 @@ export function createOpeningCollector({
     const step = () => {
       if (!day?.replay || day.window !== window) return;
       const v = virtualNow();
-      while (i < ticks.length && ticks[i].receivedAt <= v) { window.ingest(ticks[i].tick, ticks[i].receivedAt); i++; }
+      while (i < ticks.length && ticks[i].receivedAt <= v) {
+        if (!day.sealed && ticks[i].receivedAt >= sealVirtual) break;
+        window.ingest(ticks[i].tick, ticks[i].receivedAt);
+        if (day.sealed) trading?.onTicks([ticks[i].tick], ticks[i].receivedAt, { replay: true });
+        i++;
+      }
       if (!day.sealed && v >= sealVirtual) {
         day.sealed = window.seal(sealVirtual);
         day.phase = 'sealed';
+        // Paper decision on the replay ledger (in memory); later ticks drive its fills.
+        Promise.resolve(trading?.onSeal(day.sealed, { replay: true })).catch((error) => { day.tradingError = `09:20 decision failed: ${error.message}`; });
         publish(true);
       } else publish();
-      if (i < ticks.length && !day.sealed) timers.push(setTimer(step, 50));
+      if (i < ticks.length) timers.push(setTimer(step, 50));
+      else { trading?.onReplayEnd?.(); day.message = 'Replay finished.'; publish(true); }
     };
     publish(true);
     timers.push(setTimer(step, 0));
@@ -341,7 +378,7 @@ export function createOpeningCollector({
   return {
     selfTest,
     setSession(s) { session = s?.accessToken && s?.apiKey ? { apiKey: s.apiKey, accessToken: s.accessToken } : null; publish(true); },
-    prepare, connect, sealNow, stop, replay, stockDetail, status,
+    prepare, connect, sealNow, stop, replay, stockDetail, status, follow, unfollow,
     /** Called at start-up and each morning: prepare if the pre-open data is in, and arm today's timers. */
     async wake() {
       const date = indiaDate(now());

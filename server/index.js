@@ -26,6 +26,9 @@ import { snapshotDate } from '../src/core/recorder.js';
 import { analyze } from '../src/utils/analysis.js';
 import { createTickLog } from './tickLog.js';
 import { addOpeningRoutes } from './openingRoutes.js';
+import { createEventLog } from './eventLog.js';
+import { addTradingRoutes } from './tradingRoutes.js';
+import { createTradingDesk } from '../src/core/tradingDesk.js';
 import { addOrderRoutes, sameOriginOnly } from './orderRoutes.js';
 import { indiaDate } from '../src/core/calendar.js';
 import { parseCSV, rowsToObjects } from '../src/utils/csv.js';
@@ -265,12 +268,24 @@ const orderScheduler = createOrderScheduler({
 orderScheduler.load().catch((error) => console.error(`Scheduled orders: ${error.message}`));
 addOrderRoutes(app, orderScheduler, { onSession: (s) => openingCollector.setSession(s) });
 
-// Opening window 09:15–09:20 (milestone 1: read-only data collection over the Kite WebSocket).
+// Opening window 09:15–09:20 (Kite WebSocket) and the 09:20 decision with paper trading (milestone 2).
 const dataDir = fileURLToPath(new URL('../.data', import.meta.url));
 const readJsonFile = (name) => { try { return JSON.parse(readFileSync(`${dataDir}/${name}`, 'utf8')); } catch { return null; } };
 const tickLog = createTickLog(`${dataDir}/ticks`);
 const openingSubscribers = new Set();
 let openingLatest = { status: { phase: 'idle' }, rows: [] };
+// The scanner payload carries the trading view of the ledger it shows (the replay's, during a replay).
+const withTrading = (payload) => ({ ...payload, trading: tradingDesk.view(payload.status?.source === 'replay' ? 'replay' : 'day') });
+const broadcastOpening = () => {
+  const payload = withTrading(openingLatest);
+  for (const send of openingSubscribers) { try { send(payload); } catch { openingSubscribers.delete(send); } }
+};
+const paperLog = createEventLog(`${dataDir}/paper`);
+const tradingDesk = createTradingDesk({
+  store: fsStore(dataDir), log: paperLog, calendar,
+  settings: () => readJsonFile('trading-settings.json') ?? {},
+  onUpdate: () => broadcastOpening(),
+});
 const openingCollector = createOpeningCollector({
   store: fsStore(dataDir),
   kite,
@@ -289,14 +304,16 @@ const openingCollector = createOpeningCollector({
     });
     return { stocks, snapshotDate: snapshotDate(snapshot, calendar) };
   },
+  trading: tradingDesk,
   onUpdate: (payload) => {
     openingLatest = payload;
-    for (const send of openingSubscribers) { try { send(payload); } catch { openingSubscribers.delete(send); } }
+    broadcastOpening();
   },
 });
+tradingDesk.attach({ follow: openingCollector.follow, unfollow: openingCollector.unfollow });
 addOpeningRoutes(app, openingCollector, {
   tickLog,
-  getLatest: () => openingLatest,
+  getLatest: () => withTrading(openingLatest),
   subscribe: (send) => { openingSubscribers.add(send); return () => openingSubscribers.delete(send); },
 });
 app.put('/api/opening/settings', (req, res) => {
@@ -307,7 +324,10 @@ app.put('/api/opening/settings', (req, res) => {
   res.json(saved);
 });
 // Each trading morning: arm the day (and again just before connecting, in case the import was late).
-const wakeOpening = () => openingCollector.wake().catch((error) => console.error(`Opening window: ${error.message}`));
+addTradingRoutes(app, tradingDesk, { settingsFile: `${dataDir}/trading-settings.json`, log: paperLog });
+const wakeOpening = () => openingCollector.wake()
+  .then(() => tradingDesk.wake({ sealedFor: openingCollector.sealedFor }))
+  .catch((error) => console.error(`Opening window: ${error.message}`));
 for (const time of ['0 9', '12 9']) {
   cron.schedule(`${time} * * 1-5`, wakeOpening, { timezone: 'Asia/Kolkata', name: `opening-${time}` });
 }

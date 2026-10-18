@@ -13,7 +13,9 @@ It runs everything on the phone — no PC or backend needed:
 09:20 features run in the **PC backend**, not on the phone. The phone's 9:15 Confirm tab keeps working from Kite
 `/quote` polling (or NSE's website as a fallback when Kite has no market-data permission). **Live order placement
 from the phone is out of scope** for the 09:20 system: Kite only accepts order requests from a whitelisted static IP,
-and a phone's IP is not static. Scheduled orders on the phone are sent only while the app is open.
+and a phone's IP is not static. Scheduled orders on the phone are sent only while the app is open. The 09:20
+decision and paper trading (milestone 2) also run only in the PC backend; the phone shows the PAPER badge and
+points to the PC for the trading panel.
 
 **Not included: TV research.** It drives a desktop browser through YouTube caption downloads and
 calls the OpenAI API, so it stays on the PC version.

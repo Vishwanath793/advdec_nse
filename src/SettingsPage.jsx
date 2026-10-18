@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import NseScheduleSettings from './NseScheduleSettings.jsx';
 import { isNativeApp } from './platform/index.js';
+import { TradingSettings } from './TradingPanel.jsx';
 
 export default function SettingsPage({
   settings,
@@ -250,6 +251,8 @@ export default function SettingsPage({
           Save settings
         </button>
       </section>
+
+      <TradingSettings />
     </div>
   );
 }
