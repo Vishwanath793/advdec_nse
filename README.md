@@ -6,6 +6,11 @@ Install with `npm install`, then run `npm run server` and `npm run dev` in separ
 milestone built, the owner's rules, verified Kite API facts, an architecture map, what is still unverified, and
 the plan for milestones 3 and 4. The original 09:20 system spec is `docs/prompt-920-trading-system.md`.
 
+**Several developers?** Everyone uses the shared log [DEVLOG.md](DEVLOG.md): read *Work in progress* and the latest
+entries before starting, add yourself while working, and add an entry (what changed, tests, what is not
+verified, next steps) when you finish. See [Development log](#development-log-latest-session) below for the
+latest session.
+
 ## Daily NSE pre-open import
 
 Settings → NSE pre-open data controls the backend cron job. It defaults to enabled at 09:10 every day in Asia/Kolkata (IST), independent of the computer's timezone. Save NSE schedule applies changes immediately; Fetch now imports on demand.
@@ -196,3 +201,114 @@ as the **android-latest** release. Install steps, the phone's 09:10 notification
 
 Shared logic (NSE parsing, price bands, signals, Kite calls, calendar) is in `src/core/` and used by both the
 Node backend and the app; `src/platform/` picks the backend (browser) or on-device (Android) implementation.
+
+## Development log (latest session)
+
+The full, shared history is in [DEVLOG.md](DEVLOG.md); the handoff for Claude Code is [CLAUDE.md](CLAUDE.md).
+Below is the Claude Code chat from the session of **18 Oct 2026** (milestones 1 and 2, then the handoff), as it
+appeared on screen.
+
+### Progress messages
+
+- Pushing Milestone 1 to main and `android-app` (a fast-forward), and watching the Android build in the background.
+- The chart, plan, score breakdown and gap report all render. Checking the trading panel on the Orders page with
+  the replay ledger.
+- The page kept its scroll position; the user's own scheduled order is untouched. Scrolling up to the trading
+  panel.
+- The panel shows both replay trades with exits, charges and net P&L. Checking the trading settings on the
+  Settings page.
+- The settings render, with LIVE disabled and explained. Next: round-trip a settings save through the real
+  backend.
+- Save, the LIVE refusal, and restoring the defaults all work. Now the README.
+- Updating the collector's header comment, which still said "no decisions".
+- All 167 tests pass, and the build and `cap sync` succeed. Committing Milestone 2 locally, leaving out
+  `.claude/` and `docs/` as before.
+
+### Milestone 2 report
+
+Milestone 2 is done and committed on this machine as 9274f4d (not pushed). The app now decides BUY / SELL /
+NO TRADE once at 09:20 and trades those decisions on paper only. All 167 tests pass, and `npm run build` and
+`npx cap sync android` succeed. The Android build for Milestone 1 (3599186) also passed on GitHub.
+
+**What changed**
+
+- **Strategies:** three setups, each with thresholds you can change in Settings:
+  - **A, opening-range breakout:** long or short; shorts are intraday (MIS) only.
+  - **B, gap-up pullback:** gaps of 3.75% or more. It tells a real recovery from a dead-cat bounce and is
+    reported on its own line under the scanner.
+  - **C, opening momentum:** rejects moves that have already run too far.
+- **Score:** added to `confirmation.js` rather than built as a separate score. Every factor says where its data
+  comes from.
+  - The weights are either "every factor counts the same" (default) or the research weights 20/20/20/15/10/10/5.
+    Factors with no data are left out, not guessed.
+  - Tiers are 85+ strong, 70–84 watchlist, 50–69 weak, below 50 reject. A trade needs 70 or more.
+  - Stale data, no order book, a stock at its circuit limit, a late start or a 09:10 block always means
+    NO TRADE, whatever the score.
+- **Trade plan and risk:** each trade gets entry, stop and two targets rounded to Kite's tick size, a slippage
+  cap, a size based on 0.25% risk, and Zerodha's charges. Reward/risk must be at least 1.5 after costs. Other
+  limits: 1% daily loss, 2 open positions, 3 trades a day, stop after 2 losses in a row.
+- **Paper broker:**
+  - Fills are at the bid/ask plus slippage, never the last price, and a thin order book gives a partial fill.
+  - Half the position exits at T1, then the stop moves to the entry price. A stop can fill worse than its price.
+  - There is a kill switch, "square off all", and square-off at 15:10.
+  - Every event is appended to a log in `.data/paper/`. After a restart the day is rebuilt from that log and
+    checked against the saved state, and the same order is never placed twice.
+- **Screens:**
+  - A PAPER badge on every page.
+  - New scanner columns: score, strategy, decision, reasons.
+  - Clicking a stock shows a chart with the 1-minute candles, range, VWAP, entry, stop and targets, plus the score
+    breakdown.
+  - A trading panel on the Orders tab, and trading settings where LIVE is switched off with an explanation.
+- **Simulated morning:** "Replay simulated morning" now trades on its own in-memory ledger, so it never mixes
+  with today's. Run in the browser: ORBUP hit both targets for +₹474 net and MOMO hit its stop for −₹271. The other
+  11 stocks were NO TRADE, each with a reason.
+
+**One finding:** with the default ₹1 lakh capital and 0.25% risk, you risk about ₹250 a trade, and charges are
+about ₹50 a round trip. That pushed most breakout setups below 1.5 reward/risk, so the breakout targets are set at
+1.5× and 3× the risk (the distance from entry to stop). That makes the targets further away and less likely to
+be hit. These defaults are untested guesses; nothing here shows the strategies make money.
+
+**Not verified yet**
+
+- Nothing has run in market hours. The live decision at the seal, paper fills on real ticks, keeping the
+  connection open for open positions after 09:30, and the 15:10 square-off are all unverified.
+- Kite's 1-minute historical data (used for the volume baseline) hasn't been tested.
+- Paper fills assume you'd get the price shown in the five visible order-book levels; real queues and hidden
+  orders aren't modelled.
+- The backend was restarted to load the new code. It was Sunday, so no session was affected. A settings test
+  saved the default values to `.data/trading-settings.json`, and the Monday 09:15 scheduled order is untouched.
+- Android CI for this commit won't run until it's pushed.
+
+Open question at the end of the milestone: push to main and android-app? Milestone 3 (backtests, replaying
+recorded mornings, report-card comparisons and exports) waits for the owner's go-ahead.
+
+Files: 22 edited (+2088 −37), including `charges.js` (+58), `risk.js` (+79 −1) and `tradePlan.js` (+75).
+
+### Handoff request and answer
+
+**Request:** "add all the chat response that i am able to read on the screen to read me file so that i use this
+project in my other claude account to build more features so that the claude code understands what has been done
+so far and how can go ahead about further"
+
+**Answer:**
+- The handoff went into a new file, [CLAUDE.md](CLAUDE.md), instead of pasting the whole chat into README.md.
+  Claude Code reads `CLAUDE.md` automatically whenever it opens the project, so another account picks it up
+  without being told. README.md points to it. `CLAUDE.md` covers:
+  - **The app:** each tab, the tech stack, and how to run and test it.
+  - **The spec and rules:** the four milestones and their status, plus the owner's constraints, such as keeping
+    the Kite token in memory only, no LIVE trading without explicit go-ahead, the static-IP rule, and not
+    touching TV research or the Monday 09:15 scheduled order.
+  - **History:** each request and what was built, with the Milestone 1 and Milestone 2 summaries.
+  - **Kite facts:** the WebSocket format, rate limits and order fields checked in the Kite documentation, so the
+    next session doesn't guess them.
+  - **Architecture:** a map of how data flows from the 09:10 import to the paper trades.
+  - **Still unverified:** nothing in the 09:20 system has run during market hours yet, and the strategy
+    thresholds are untested.
+  - **How to continue:** what Milestone 3 (research) involves and the conditions before Milestone 4 (LIVE), plus
+    tips for working on this Windows machine.
+- The original spec was committed at `docs/prompt-920-trading-system.md` (checked first: no keys or tokens).
+- Everything was committed locally (feea107 and Milestone 2's 9274f4d), but not pushed. Another account can only
+  see it once it's on GitHub.
+
+Follow-up: this session log was added here, and [DEVLOG.md](DEVLOG.md) was created so several developers can see
+each other's recent and in-progress work.

@@ -4,6 +4,12 @@ Read this first. It records what has been built so far (the requests, the decisi
 the chat sessions), the rules the owner set, how the code is organised, what is still unverified, and how to
 continue. User-facing documentation is in [README.md](README.md) and [android/README.md](android/README.md).
 
+**Several people work on this repo. Before starting any task, read [DEVLOG.md](DEVLOG.md)** (*Work in progress*
+and the latest entries), add yourself to *Work in progress*, and don't change code someone else lists there
+without asking the owner. When you finish, add a DEVLOG entry using its template (what changed, files, tests,
+what is not verified, next steps) and commit it with the work. Pull before editing DEVLOG.md; keep both sides
+of a conflict.
+
 Owner's git identity: Vishwanath793 / vishwanath793@gmail.com. Branches `main` and `android-app` are kept
 identical (fast-forward). Pushing to `main` also builds and publishes the Android APK (GitHub Actions, release
 `android-latest`).
