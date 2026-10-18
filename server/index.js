@@ -15,6 +15,7 @@ import { createTvService } from './tv/service.js';
 import { createPriceBandService } from './priceBands.js';
 import { createMarketContextService } from './marketContext.js';
 import { createKiteClient, KiteError } from '../src/core/kite.js';
+import { kiteRoute } from './kiteRoute.js';
 import { createRecorder } from '../src/core/recorder.js';
 import { createAutoExport } from './autoExport.js';
 import { createOrderScheduler } from '../src/core/orderScheduler.js';
@@ -332,17 +333,6 @@ for (const time of ['0 9', '12 9']) {
   cron.schedule(`${time} * * 1-5`, wakeOpening, { timezone: 'Asia/Kolkata', name: `opening-${time}` });
 }
 wakeOpening();
-const kiteRoute = (required, run) => async (req, res) => {
-  const body = req.body ?? {};
-  if (required.some((k) => !body[k])) {
-    return res.status(400).json({ error: `${required.join(', ')} ${required.length > 1 ? 'are' : 'is'} required` });
-  }
-  try { return res.json(await run(body)); }
-  catch (e) {
-    if (e instanceof KiteError) return res.status(e.status).json({ error: e.message, data: e.data });
-    return res.status(502).json({ error: `Could not reach Kite: ${e.message}` });
-  }
-};
 app.post('/api/kite/session', kiteRoute(['apiKey', 'apiSecret', 'requestToken'], async (b) => ({ session: await kite.createSession(b) })));
 app.post('/api/kite/positions', kiteRoute(['apiKey', 'accessToken'], async (b) => ({ positions: await kite.positions(b) })));
 app.post('/api/kite/account-summary', kiteRoute(['apiKey', 'accessToken'], async (b) => ({ account: await kite.accountSummary(b) })));
@@ -356,7 +346,8 @@ app.post('/api/kite/quote', kiteRoute(['apiKey', 'accessToken', 'instruments'], 
 app.use(express.static(fileURLToPath(new URL('../dist', import.meta.url))));
 // Errors (e.g. malformed JSON) as JSON, without stack traces.
 app.use((error, _req, res, _next) => {
-  const status = error.status ?? error.statusCode ?? 500;
+  const raw = error.status ?? error.statusCode ?? 500;
+  const status = raw >= 400 && raw < 600 ? raw : 500;
   res.status(status).json({ error: status === 400 ? 'The request body is not valid JSON.' : error.message });
 });
 const PORT = process.env.PORT || 3001;

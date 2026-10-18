@@ -59,10 +59,34 @@ still not available** (the desk forces PAPER, and `PUT /api/trading/settings` st
   - `readKiteOrder`, `classifyOrderError` (unknown / ip / session / rate / rejected), `liveConfirmText`,
     `roundToTick`
 
-**Tests / checks:** new `server/liveOrders.test.js` (4 tests). `npm test` 171 pass; `npm run build` and
-`npx cap sync android` OK.
+**Regression found and fixed while testing:**
+- `/api/kite/*` passed the error status straight to Express, so a "no response" error (status 0) would have
+  crashed the request instead of returning 502.
+- The route helper moved to `server/kiteRoute.js`: Kite's own 4xx/5xx pass through, anything else becomes 502,
+  and `unknown: true` is added when the outcome is unknown. The final error handler also guards against invalid
+  statuses.
+- `kite.placeOrder` appends "check your Kite order book before placing it again" to unknown outcomes, so manual
+  BUY/SELL, scheduled orders and the Android app all show it.
 
-**Not verified:** none of this has been called against Kite. No live order was placed.
+**Tests / checks:**
+- `server/liveOrders.test.js` (9 tests):
+  - tags
+  - error classes
+  - a real AbortSignal timeout (unknown, the hint included, no token in the message)
+  - modify/cancel/orders/trades request shapes
+  - order bodies against Kite's fields
+  - the route status mapping, over HTTP
+- One new scheduler test using the real client with no network: fails once, never resends, and shows the hint.
+- `npm test`: 176 pass. `npm run build` and `npx cap sync android` OK.
+- Against the real backend and Kite (read-only, after a restart):
+  - account summary 200
+  - INFY quote 200
+  - a bad token gives 403 passed through
+  - missing fields give 400
+  - `PUT /api/trading/settings {mode: LIVE}` gives 409; the mode stays PAPER
+  - the owner's PERSISTENT Monday 09:15 order is untouched
+
+**Not verified:** the order, modify and cancel calls have not been made against Kite. No order was placed.
 
 **Remaining for milestone 4:**
 - **A live broker:** send orders through the tags and a rate-spaced queue, poll the order book, reconcile unknown

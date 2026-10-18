@@ -277,6 +277,18 @@ test('Kite rate limit (429) is retried once; other errors are never resent', asy
   assert.equal(r.o.result.error, 'Insufficient funds.');
 });
 
+test('with the real Kite client, no response from Kite fails the order once, never resends, and says to check the order book', async () => {
+  const clock = fakeTime(ist(MONDAY, '09:14:50'));
+  let calls = 0;
+  const kite = createKiteClient({ fetchImpl: async () => { calls++; throw new TypeError('fetch failed'); } });
+  const sched = scheduler(clock, (a) => kite.placeOrder(a));
+  const { order } = await sched.add({ ...base, symbol: 'NET', triggerAt: new Date(+clock.now() + 5_000).toISOString() });
+  await clock.advance(5_000 + RATE_RETRY_MS + 1_000);
+  const o = (await sched.list()).find((x) => x.id === order.id);
+  assert.deepEqual([calls, o.status, o.result.attempts], [1, 'failed', 1]);
+  assert.match(o.result.error, /no response from Kite.*check your Kite order book before placing it again/);
+});
+
 test('a session set after scheduling is used; cancelling while sending is refused', async () => {
   const clock = fakeTime(ist(MONDAY, '09:14:00'));
   let release;

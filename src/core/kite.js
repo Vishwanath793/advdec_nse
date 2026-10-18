@@ -163,10 +163,15 @@ export function createKiteClient({ fetchImpl = fetch } = {}) {
     },
     async placeOrder({ apiKey, accessToken, order, timeoutMs }) {
       const variety = encodeURIComponent(order.variety || 'regular');
-      const payload = await call(`/orders/${variety}`, {
-        method: 'POST', apiKey, accessToken, form: orderForm(order), failure: 'Kite order failed', timeoutMs,
-      });
-      return payload.data ?? payload;
+      try {
+        const payload = await call(`/orders/${variety}`, {
+          method: 'POST', apiKey, accessToken, form: orderForm(order), failure: 'Kite order failed', timeoutMs,
+        });
+        return payload.data ?? payload;
+      } catch (error) {
+        if (error.unknown) error.message += ' The order may or may not have reached Kite: check your Kite order book before placing it again.';
+        throw error;
+      }
     },
     /** Modify an open/pending order: `params` from order_type, quantity, price, trigger_price, validity. */
     async modifyOrder({ apiKey, accessToken, variety = 'regular', orderId, params, timeoutMs }) {
@@ -184,13 +189,13 @@ export function createKiteClient({ fetchImpl = fetch } = {}) {
       return payload.data ?? payload;
     },
     /** The day's order book (every order with its latest status, filled_quantity, average_price, tag). */
-    async orders({ apiKey, accessToken }) {
-      const payload = await call('/orders', { apiKey, accessToken, failure: 'Kite order book request failed', timeoutMs: 10_000 });
+    async orders({ apiKey, accessToken, timeoutMs = 10_000 }) {
+      const payload = await call('/orders', { apiKey, accessToken, failure: 'Kite order book request failed', timeoutMs });
       return Array.isArray(payload.data) ? payload.data : [];
     },
     /** The day's executions. */
-    async trades({ apiKey, accessToken }) {
-      const payload = await call('/trades', { apiKey, accessToken, failure: 'Kite trades request failed', timeoutMs: 10_000 });
+    async trades({ apiKey, accessToken, timeoutMs = 10_000 }) {
+      const payload = await call('/trades', { apiKey, accessToken, failure: 'Kite trades request failed', timeoutMs });
       return Array.isArray(payload.data) ? payload.data : [];
     },
   };
