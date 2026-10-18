@@ -10,6 +10,15 @@ without asking the owner. When you finish, add a DEVLOG entry using its template
 what is not verified, next steps) and commit it with the work. Pull before editing DEVLOG.md; keep both sides
 of a conflict.
 
+**Shared folder on the owner's PC:** the working copy is `C:\Users\Public\advdec_nse`, used by several Windows
+accounts, each with its own Claude account. (The old `C:\Users\DELL\advdec_nse` is a backup only; don't work there.)
+- Each Windows user runs, once: `git config --global --add safe.directory C:/Users/Public/advdec_nse`. Otherwise
+  git refuses the repo ("dubious ownership") because another account created the files.
+- Pushing needs that user's own GitHub access (SSH key or HTTPS login); the remote is SSH.
+- Only one backend can run at a time (port 3001; Vite on 5173). Before starting `npm run server`, check whether
+  another Windows user's session already has it running.
+- Every logged-in user can read `.env` (OpenAI key) and `.data/` here.
+
 Owner's git identity: Vishwanath793 / vishwanath793@gmail.com. Branches `main` and `android-app` are kept
 identical (fast-forward). Pushing to `main` also builds and publishes the Android APK (GitHub Actions, release
 `android-latest`).
