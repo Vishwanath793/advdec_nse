@@ -380,6 +380,9 @@ Reuse what exists: `decideOpening`, `stepTick` / `rebuildLedger`, `simulatedMorn
   have broken several times. **Use the Edit/Write tools** for code containing those characters. Python is not
   installed.
 - LF→CRLF warnings on commit are normal.
+- **This PC runs Node 24; GitHub CI runs Node 22** (`.github/workflows`). A test passing locally can still fail
+  in CI. Example: a test waiting only on `AbortSignal.timeout` (an unref'd timer) passed locally but failed in CI;
+  keep a ref'd timer during such waits. CI job logs need a GitHub login; the public API shows step results.
 - Restart the backend (`preview_stop` / `preview_start` "backend") after server-side changes. `npm run server` has
   no watch mode. Restarting clears the in-memory Kite token; the app re-shares it when the page reloads.
 - After UI edits, hot reload can leave a stale error in the console (for example "ModeBadge is not defined");

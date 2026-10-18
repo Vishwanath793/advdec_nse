@@ -86,6 +86,10 @@ still not available** (the desk forces PAPER, and `PUT /api/trading/settings` st
   - `PUT /api/trading/settings {mode: LIVE}` gives 409; the mode stays PAPER
   - the owner's PERSISTENT Monday 09:15 order is untouched
 
+**CI:** the first push (b3e5b51) failed the Test step on GitHub (Node 22) while all tests passed here (Node 24).
+The likely cause is the real-timeout test waiting only on `AbortSignal.timeout`'s unref'd timer. It now holds a
+ref'd timer while it waits (66d62cd), and CI is green: tests, APK, android-latest release.
+
 **Not verified:** the order, modify and cancel calls have not been made against Kite. No order was placed.
 
 **Remaining for milestone 4:**
