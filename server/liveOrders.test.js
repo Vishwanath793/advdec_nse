@@ -41,7 +41,11 @@ test('Kite client: no response is an unknown outcome; a 5xx is unknown; a 4xx is
   assert.equal(book[0].order_id, '9');
 });
 
-test('Kite client: a real timeout (AbortSignal) is unknown, says so, and never leaks the token', async () => {
+test('Kite client: a real timeout (AbortSignal) is unknown, says so, and never leaks the token', async (t) => {
+  // AbortSignal.timeout's timer doesn't keep the process alive; on some Node versions the test runner would
+  // otherwise see an idle event loop and cancel this test while it waits. A server process has sockets open.
+  const keepAlive = setInterval(() => {}, 1_000);
+  t.after(() => clearInterval(keepAlive));
   const hanging = createKiteClient({
     fetchImpl: (_url, init) => new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason))),
   });
