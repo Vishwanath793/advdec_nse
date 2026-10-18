@@ -8,6 +8,7 @@ import { createMarketContextService } from '../core/marketContext.js';
 import { createKiteClient } from '../core/kite.js';
 import { createRecorder } from '../core/recorder.js';
 import { createOrderScheduler } from '../core/orderScheduler.js';
+import { createNseLiveService } from '../core/nseLive.js';
 import { parseCSV, rowsToObjects } from '../utils/csv.js';
 import { createPhonePreopen } from './phonePreopen.js';
 
@@ -106,6 +107,8 @@ export function createAndroidApi() {
   const store = deviceStore();
   const fetchImpl = nativeFetch;
   const priceBands = createPriceBandService({ store, fetchImpl });
+  // NSE cookies are kept by the phone's native HTTP layer.
+  const nseLive = createNseLiveService({ fetchImpl });
   const context = createMarketContextService({ store, fetchImpl, calendar });
   const recorder = createRecorder({
     store,
@@ -162,6 +165,9 @@ export function createAndroidApi() {
     },
     priceBands: { get: () => priceBands.get() },
     context: { get: (date = null) => context.get({ date }) },
+    live: { quote: (instruments) => nseLive.quote(instruments) },
+    // The WebSocket collector runs in the PC backend; the phone keeps /quote polling (milestone 1).
+    opening: null,
     files: {
       /** Saves into Documents/AdvDec on the phone (visible in the Files app). */
       async save(name, bytes) {

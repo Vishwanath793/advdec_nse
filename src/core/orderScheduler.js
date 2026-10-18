@@ -20,6 +20,10 @@ export const MAX_AHEAD_DAYS = 7;
 export const MAX_QUANTITY = 100_000;
 /** Regular orders are accepted 09:00–15:30 IST (pre-open order entry ends at 09:08). */
 export const ORDER_WINDOW = { start: '09:00', end: '15:30', preOpenEnd: '09:08', open: '09:15' };
+/** Kite allows 10 order requests a second: orders due together go out this far apart. */
+export const SEND_SPACING_MS = 120;
+/** Wait before the single retry of an order Kite refused for speed (HTTP 429). */
+export const RATE_RETRY_MS = 1_000;
 const HISTORY_KEEP = 100;
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const FILE = 'scheduled-orders.json';
@@ -87,6 +91,24 @@ export function validateScheduledOrder(input, now, calendar) {
   };
 }
 
+/** How soon to reload after an order fires: its result normally arrives within a second or two. */
+export const RESULT_CHECK_MS = 1_500;
+/** While an order is sending (or past due but not yet reported), check this often. */
+export const SENDING_CHECK_MS = 2_000;
+
+/**
+ * Milliseconds until the Orders page should next reload the list (Orders page), or null when
+ * nothing is pending: shortly after the next order's time, or soon while one
+ * is sending or overdue. (Timers longer than ~24 days aren't possible; cap.)
+ */
+export function nextCheckDelay(orders, nowMs) {
+  const pending = orders.filter((o) => o.status === 'scheduled' || o.status === 'placing');
+  if (!pending.length) return null;
+  if (pending.some((o) => o.status === 'placing' || new Date(o.triggerAt) <= nowMs)) return SENDING_CHECK_MS;
+  const next = Math.min(...pending.map((o) => +new Date(o.triggerAt)));
+  return Math.min(next - nowMs + RESULT_CHECK_MS, 2 ** 31 - 1);
+}
+
 /** Kite order form fields for a scheduled order. */
 export function kiteOrderFor(o) {
   return {
@@ -116,6 +138,8 @@ export function createOrderScheduler({
   const timers = new Map();
   let loaded = null;
   let nextId = 1;
+  let sendQueue = Promise.resolve();
+  let lastSendAt = 0;
 
   const save = () => store.write(FILE, { orders });
   const publish = () => { try { onChange(list()); } catch { /* listener errors don't matter */ } };
@@ -155,21 +179,56 @@ export function createOrderScheduler({
       return o;
     }
     if (!session?.accessToken) {
-      await update(o, { status: 'failed', result: { error: 'Kite was not connected at the trigger time. Log in to Kite in Settings.' } });
+      await update(o, { status: 'failed', result: { error: 'Kite was not connected at the trigger time. Log in to Kite in Settings (and keep the app open so it can hand the session over).' } });
       return o;
     }
     await update(o, { status: 'placing', result: null });
-    try {
-      const response = await placeOrder({ apiKey: session.apiKey, accessToken: session.accessToken, order: kiteOrderFor(o) });
-      const placedAt = now();
-      await update(o, {
-        status: 'placed',
-        result: { orderId: response?.order_id ?? null, placedAt: placedAt.toISOString(), latencyMs: placedAt - due },
-      });
-    } catch (error) {
-      await update(o, { status: 'failed', result: { error: error.message, at: now().toISOString() } });
-    }
+    // Orders due at the same moment go out one after another, within Kite's rate limit.
+    const send = sendQueue.then(() => sendOne(o, due));
+    sendQueue = send.catch(() => {});
+    await send;
     return o;
+  }
+
+  async function sendOne(o, due) {
+    const wait = lastSendAt + SEND_SPACING_MS - +now();
+    if (wait > 0) await new Promise((resolve) => setTimer(resolve, wait));
+    for (let attempt = 1; ; attempt++) {
+      const sentAt = now();
+      lastSendAt = +sentAt;
+      try {
+        const response = await placeOrder({ apiKey: session.apiKey, accessToken: session.accessToken, order: kiteOrderFor(o) });
+        const confirmedAt = now();
+        await update(o, {
+          status: 'placed',
+          result: {
+            orderId: response?.order_id ?? null,
+            sentAt: sentAt.toISOString(),
+            sendDelayMs: sentAt - due, // from the chosen time to the request leaving
+            kiteMs: confirmedAt - sentAt, // Kite's round trip
+            attempts: attempt,
+          },
+        });
+        return;
+      } catch (error) {
+        // 429 = Kite refused it for speed, so it was not placed: one retry is safe.
+        // Anything else (timeouts, 5xx) may have reached Kite, so it is never resent.
+        if (error?.status === 429 && attempt === 1 && now() - due + RATE_RETRY_MS <= ORDER_GRACE_MS) {
+          await new Promise((resolve) => setTimer(resolve, RATE_RETRY_MS));
+          continue;
+        }
+        const expired = error?.status === 403 || error?.data?.error_type === 'TokenException';
+        await update(o, {
+          status: 'failed',
+          result: {
+            error: expired ? `Kite session expired or invalid: log in to Kite again in Settings. (${error.message})` : error.message,
+            at: now().toISOString(),
+            attempts: attempt,
+          },
+        });
+        return;
+      }
+    }
   }
 
   async function load() {

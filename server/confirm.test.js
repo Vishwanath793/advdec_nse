@@ -172,7 +172,7 @@ test('the 9:20 reading keeps levels and results for scored stocks only, and flag
   };
   const r = confirmationReading(stocks, quotes, ist('2026-10-19', '09:20:04'), '2026-10-19');
   assert.deepEqual(Object.keys(r.readings), ['AAA']); // BBB: no quote; CCC: not scored
-  assert.deepEqual(r.readings.AAA, { ltp: 103.4, open: 102, high: 103.5, low: 101.6, vwap: 102.6, volume: 120000, status: 'confirmed', score: 100, tradeScore: 88 });
+  assert.deepEqual(r.readings.AAA, { ltp: 103.4, open: 102, high: 103.5, low: 101.6, vwap: 102.6, volume: 120000, status: 'confirmed', score: 100, source: 'kite', tradeScore: 88 });
   assert.equal(r.late, false);
   assert.equal(confirmationReading(stocks, quotes, ist('2026-10-19', '09:40:00'), '2026-10-19').late, true);
 });

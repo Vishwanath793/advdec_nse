@@ -568,6 +568,7 @@ body {
 .check.fail { color: var(--red); }
 .check.neutral { color: var(--muted); }
 .check.warn { color: var(--amber); }
+.check.na { color: var(--muted); opacity: 0.5; }
 .confirm-plan { white-space: nowrap; }
 .confirm-trig { margin-left: 6px; font-size: 0.7rem; }
 
@@ -585,6 +586,18 @@ body {
 .order-summary { font-weight: 600; }
 .order-detail { max-width: 520px; }
 .confirm-schedule { padding: 3px 8px; font-size: 0.75rem; white-space: nowrap; }
+
+/* Opening-window scanner */
+.opening-scanner { margin-bottom: 18px; }
+.opening-table tbody tr { cursor: pointer; }
+.source-badge { margin-left: 8px; font-size: 0.72rem; vertical-align: middle; }
+.source-websocket { background: rgba(34, 197, 94, 0.15); color: var(--green); }
+.source-replay { background: rgba(79, 124, 255, 0.15); color: #a8c0ff; }
+.source-quote { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
+.source-nse { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
+.source-none { background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
+.opening-detail { margin-top: 12px; }
+.opening-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 18px; }
 
 /* Report card */
 .report-heading { margin: 26px 0 10px; font-size: 1rem; }

@@ -9,6 +9,12 @@ It runs everything on the phone — no PC or backend needed:
 - Signals: results since the last close, results due today, ex-dates, relative volume, gap vs yesterday's range
 - Kite Connect: login, account summary, positions, BUY/SELL and square-off, max-loss auto square-off
 
+**The 09:15–09:20 opening window on the phone:** the Kite WebSocket collector, its recordings and the sealed
+09:20 features run in the **PC backend**, not on the phone. The phone's 9:15 Confirm tab keeps working from Kite
+`/quote` polling (or NSE's website as a fallback when Kite has no market-data permission). **Live order placement
+from the phone is out of scope** for the 09:20 system: Kite only accepts order requests from a whitelisted static IP,
+and a phone's IP is not static. Scheduled orders on the phone are sent only while the app is open.
+
 **Not included: TV research.** It drives a desktop browser through YouTube caption downloads and
 calls the OpenAI API, so it stays on the PC version.
 

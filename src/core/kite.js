@@ -1,3 +1,5 @@
+import { gunzipSync, strFromU8 } from 'fflate';
+
 /**
  * Kite Connect v3 calls, shared by the Node backend (proxy) and the Android app
  * (direct). `fetchImpl` is fetch-compatible.
@@ -54,21 +56,46 @@ export function summarizeMargins(payload) {
   return { availableCash, net, utilized, accountValue, intradayLeverage };
 }
 
+/** Replace any of `secrets` (access token, API secret) found in `text` with "***". */
+export function redactSecrets(text, ...secrets) {
+  let out = String(text ?? '');
+  for (const s of secrets) if (typeof s === 'string' && s.length >= 6) out = out.split(s).join('***');
+  return out;
+}
+
+/** Kite's "2026-10-19T09:15:00+0530" candle time -> Date. */
+export const kiteCandleTime = (text) => new Date(String(text).replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+
 export function createKiteClient({ fetchImpl = fetch } = {}) {
+  const headersFor = (apiKey, accessToken, form) => ({
+    'X-Kite-Version': '3',
+    ...(accessToken ? { Authorization: `token ${apiKey}:${accessToken}` } : {}),
+    ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
+  });
+
   async function call(path, { method = 'GET', apiKey, accessToken, form, failure }) {
     const response = await fetchImpl(`${KITE_API}${path}`, {
       method,
-      headers: {
-        'X-Kite-Version': '3',
-        ...(accessToken ? { Authorization: `token ${apiKey}:${accessToken}` } : {}),
-        ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
-      },
+      headers: headersFor(apiKey, accessToken, form),
       body: form ? form.toString() : undefined,
       signal: AbortSignal.timeout(25_000),
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new KiteError(payload.message || failure, response.status, payload);
+    if (!response.ok) throw new KiteError(redactSecrets(payload.message || failure, accessToken, apiKey), response.status, payload);
     return payload;
+  }
+
+  /** A non-JSON response (the instruments CSV), gunzipped when Kite sends a gzip file. */
+  async function callText(path, { apiKey, accessToken, failure }) {
+    const response = await fetchImpl(`${KITE_API}${path}`, {
+      headers: headersFor(apiKey, accessToken), signal: AbortSignal.timeout(60_000), binary: true,
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new KiteError(redactSecrets(payload.message || failure, accessToken, apiKey), response.status, payload);
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return strFromU8(bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes);
   }
 
   return {
@@ -105,6 +132,21 @@ export function createKiteClient({ fetchImpl = fetch } = {}) {
         Object.assign(out, payload.data ?? {});
       }
       return out;
+    },
+    /** The day's instruments dump for one exchange (CSV text; generated once a day by Kite). */
+    instrumentsCsv: ({ apiKey, accessToken, exchange }) => callText(`/instruments/${encodeURIComponent(exchange)}`, {
+      apiKey, accessToken, failure: `Kite instruments download failed (${exchange})`,
+    }),
+    /**
+     * Historical candles [[Date, open, high, low, close, volume, oi?], ...]. `from`/`to` are
+     * "yyyy-mm-dd hh:mm:ss" (IST). Kite allows 3 requests a second: callers pace themselves.
+     */
+    async historical({ apiKey, accessToken, token, interval, from, to, oi = false }) {
+      const q = new URLSearchParams({ from, to, ...(oi ? { oi: '1' } : {}) });
+      const payload = await call(`/instruments/historical/${encodeURIComponent(token)}/${encodeURIComponent(interval)}?${q}`, {
+        apiKey, accessToken, failure: 'Kite historical data request failed',
+      });
+      return (payload.data?.candles ?? []).map(([t, ...rest]) => [kiteCandleTime(t), ...rest]);
     },
     async placeOrder({ apiKey, accessToken, order }) {
       const variety = encodeURIComponent(order.variety || 'regular');

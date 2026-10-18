@@ -35,11 +35,13 @@ export function createWebApi() {
     },
     preopen: {
       /** Server-sent events: cached status once, then updates. Returns an unsubscribe function. */
-      subscribe(onUpdate, onError) {
+      /** `onConnect` runs on every (re)connection, e.g. after the backend restarts. */
+      subscribe(onUpdate, onError, onConnect) {
         let events;
         // Defer connection until after React StrictMode's setup/cleanup check.
         const startup = setTimeout(() => {
           events = new EventSource('/api/nse/preopen/events');
+          events.onopen = () => onConnect?.();
           events.onmessage = (event) => {
             try { onUpdate(JSON.parse(event.data)); }
             catch { onError('Could not read the NSE update. Reload the page to reconnect.'); }
@@ -71,6 +73,27 @@ export function createWebApi() {
       saveSettings: (factorSettings) => json(post('/api/export/settings', { factorSettings }, 'PUT')),
       status: () => json(fetch('/api/export/status')),
     },
+    /** The backend's 09:15–09:20 opening-window collector (Kite WebSocket). */
+    opening: {
+      /** Server-sent events: the latest scanner payload, then each update (≤ 1/s). Returns unsubscribe. */
+      subscribe(onUpdate, onError = () => {}) {
+        let events;
+        const startup = setTimeout(() => {
+          events = new EventSource('/api/opening/events');
+          events.onmessage = (e) => { try { onUpdate(JSON.parse(e.data)); } catch { /* ignore a bad frame */ } };
+          events.onerror = () => onError('Opening-window updates disconnected; reconnecting…');
+        }, 0);
+        return () => { clearTimeout(startup); events?.close(); };
+      },
+      stock: (symbol) => json(fetch(`/api/opening/stock/${encodeURIComponent(symbol)}`)),
+      prepare: () => json(fetch('/api/opening/prepare', { method: 'POST' })),
+      replay: (body) => json(post('/api/opening/replay', body)),
+      /** Read-only Kite setup check: instruments, historical, quote, WebSocket. */
+      selfTest: () => json(fetch('/api/opening/selftest', { method: 'POST' })),
+      saveSettings: (body) => json(post('/api/opening/settings', body, 'PUT')),
+    },
+    /** Live prices from NSE (fallback when Kite has no market data), in Kite's quote shape. */
+    live: { quote: (instruments) => json(post('/api/nse/live', { instruments })) },
     /** Time-triggered orders, sent by the backend (the browser can be closed). */
     scheduledOrders: {
       runsInBackground: true,

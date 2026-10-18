@@ -18,6 +18,15 @@ import { createKiteClient, KiteError } from '../src/core/kite.js';
 import { createRecorder } from '../src/core/recorder.js';
 import { createAutoExport } from './autoExport.js';
 import { createOrderScheduler } from '../src/core/orderScheduler.js';
+import { createNseLiveService } from '../src/core/nseLive.js';
+import { createOpeningCollector } from '../src/core/openingCollector.js';
+import { createInstrumentService } from '../src/core/instruments.js';
+import { createHistoryService } from '../src/core/kiteHistory.js';
+import { snapshotDate } from '../src/core/recorder.js';
+import { analyze } from '../src/utils/analysis.js';
+import { createTickLog } from './tickLog.js';
+import { addOpeningRoutes } from './openingRoutes.js';
+import { addOrderRoutes, sameOriginOnly } from './orderRoutes.js';
 import { indiaDate } from '../src/core/calendar.js';
 import { parseCSV, rowsToObjects } from '../src/utils/csv.js';
 import { fsStore } from './fsStore.js';
@@ -60,7 +69,11 @@ app.get('/api/tv/artifacts/:date/:filename', (req, res) => {
 // Each successful fetch is archived by the daily recorder (set up below).
 const preopen = createPreopenService({
   file: fileURLToPath(new URL('../.data/nse-preopen.json', import.meta.url)),
-  onSnapshot: (snapshot) => recorder.record(snapshot),
+  onSnapshot: async (snapshot) => {
+    await recorder.record(snapshot);
+    // Today's candidates are in: build the opening-window universe (09:08–09:20 only).
+    openingCollector.wake().catch((error) => console.error(`Opening window: ${error.message}`));
+  },
 });
 app.get('/api/nse/preopen', (_req, res) => {
   res.set('Cache-Control', 'no-store').json(preopen.status());
@@ -98,6 +111,17 @@ const priceBands = createPriceBandService({ file: fileURLToPath(new URL('../.dat
 app.get('/api/nse/price-bands', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try { res.json(await priceBands.get({ force: req.query.refresh === '1' })); }
+  catch (error) { res.status(502).json({ error: error.message }); }
+});
+
+// Live prices from NSE's website, for the 9:15 confirmation when Kite has no market data.
+const nseLive = createNseLiveService();
+app.post('/api/nse/live', async (req, res) => {
+  const instruments = req.body?.instruments;
+  if (instruments != null && (!Array.isArray(instruments) || instruments.length > 2000 || instruments.some((i) => typeof i !== 'string'))) {
+    return res.status(400).json({ error: 'instruments must be a list like ["NSE:INFY"].' });
+  }
+  try { res.set('Cache-Control', 'no-store').json(await nseLive.quote(instruments ?? null)); }
   catch (error) { res.status(502).json({ error: error.message }); }
 });
 
@@ -227,6 +251,7 @@ app.delete('/api/master-stock', (_req, res) => {
 });
 
 // Kite Connect proxy (logic shared with the Android app in src/core/kite.js).
+app.use('/api/kite', sameOriginOnly);
 const kite = createKiteClient();
 
 // Time-triggered orders ("BUY 10 INFY at market at 09:15:00"), sent to Kite by the
@@ -238,25 +263,55 @@ const orderScheduler = createOrderScheduler({
   placeOrder: (args) => kite.placeOrder(args),
 });
 orderScheduler.load().catch((error) => console.error(`Scheduled orders: ${error.message}`));
-const orderPayload = async () => ({ orders: await orderScheduler.list(), session: orderScheduler.sessionStatus() });
-app.get('/api/orders/scheduled', async (_req, res) => {
-  try { res.set('Cache-Control', 'no-store').json(await orderPayload()); }
-  catch (error) { res.status(500).json({ error: error.message }); }
+addOrderRoutes(app, orderScheduler, { onSession: (s) => openingCollector.setSession(s) });
+
+// Opening window 09:15–09:20 (milestone 1: read-only data collection over the Kite WebSocket).
+const dataDir = fileURLToPath(new URL('../.data', import.meta.url));
+const readJsonFile = (name) => { try { return JSON.parse(readFileSync(`${dataDir}/${name}`, 'utf8')); } catch { return null; } };
+const tickLog = createTickLog(`${dataDir}/ticks`);
+const openingSubscribers = new Set();
+let openingLatest = { status: { phase: 'idle' }, rows: [] };
+const openingCollector = createOpeningCollector({
+  store: fsStore(dataDir),
+  kite,
+  instruments: createInstrumentService({ store: fsStore(dataDir), kite }),
+  history: createHistoryService({ store: fsStore(dataDir), kite, calendar }),
+  calendar,
+  tickLog,
+  settings: () => readJsonFile('opening-settings.json') ?? {},
+  // Candidates: today's 09:10 pre-open analysed as in the browser (factors from the browser's last choice).
+  getCandidates: async () => {
+    const snapshot = preopen.status().snapshot;
+    if (!snapshot) return null;
+    const context = await marketContext.get().catch(() => null);
+    const { stocks } = analyze(snapshot.rows, currentMasterRows(), await priceBands.get().catch(() => null), {
+      convictionFactors: readJsonFile('export-settings.json')?.factorSettings ?? null, context,
+    });
+    return { stocks, snapshotDate: snapshotDate(snapshot, calendar) };
+  },
+  onUpdate: (payload) => {
+    openingLatest = payload;
+    for (const send of openingSubscribers) { try { send(payload); } catch { openingSubscribers.delete(send); } }
+  },
 });
-app.post('/api/orders/scheduled', async (req, res) => {
-  try {
-    const { order, warnings } = await orderScheduler.add(req.body?.order);
-    res.status(201).json({ order, warnings, ...(await orderPayload()) });
-  } catch (error) { res.status(400).json({ error: error.message }); }
+addOpeningRoutes(app, openingCollector, {
+  tickLog,
+  getLatest: () => openingLatest,
+  subscribe: (send) => { openingSubscribers.add(send); return () => openingSubscribers.delete(send); },
 });
-app.delete('/api/orders/scheduled/:id', async (req, res) => {
-  try { await orderScheduler.cancel(req.params.id); res.json(await orderPayload()); }
-  catch (error) { res.status(400).json({ error: error.message }); }
+app.put('/api/opening/settings', (req, res) => {
+  const minGapPct = Number(req.body?.minGapPct);
+  const watchlist = Array.isArray(req.body?.watchlist) ? req.body.watchlist.map((x) => String(x).trim().toUpperCase()).filter((x) => /^[A-Z0-9&_-]{1,25}$/.test(x)).slice(0, 200) : [];
+  const saved = { minGapPct: Number.isFinite(minGapPct) && minGapPct >= 0 && minGapPct <= 20 ? minGapPct : 0.5, watchlist };
+  writeFileSync(`${dataDir}/opening-settings.json`, JSON.stringify(saved, null, 2));
+  res.json(saved);
 });
-app.put('/api/orders/session', (req, res) => {
-  const { apiKey, accessToken, userId } = req.body ?? {};
-  res.json(orderScheduler.setSession(apiKey && accessToken ? { apiKey, accessToken, userId } : null));
-});
+// Each trading morning: arm the day (and again just before connecting, in case the import was late).
+const wakeOpening = () => openingCollector.wake().catch((error) => console.error(`Opening window: ${error.message}`));
+for (const time of ['0 9', '12 9']) {
+  cron.schedule(`${time} * * 1-5`, wakeOpening, { timezone: 'Asia/Kolkata', name: `opening-${time}` });
+}
+wakeOpening();
 const kiteRoute = (required, run) => async (req, res) => {
   const body = req.body ?? {};
   if (required.some((k) => !body[k])) {
@@ -279,6 +334,11 @@ app.post('/api/kite/quote', kiteRoute(['apiKey', 'accessToken', 'instruments'], 
 }));
 
 app.use(express.static(fileURLToPath(new URL('../dist', import.meta.url))));
+// Errors (e.g. malformed JSON) as JSON, without stack traces.
+app.use((error, _req, res, _next) => {
+  const status = error.status ?? error.statusCode ?? 500;
+  res.status(status).json({ error: status === 400 ? 'The request body is not valid JSON.' : error.message });
+});
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`Backend listening on http://127.0.0.1:${PORT}`);

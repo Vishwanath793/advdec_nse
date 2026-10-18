@@ -14,6 +14,67 @@ NSE's source timestamp and the fetch time are shown separately, because weekends
 
 Validation: `npm test` and `npm run build`.
 
+## Opening window 09:15–09:20 (Kite WebSocket)
+
+Milestone 1 of the 09:20 trading system: **read-only data collection, no buy/sell decisions yet.** The PC backend
+collects the first five minutes over the Kite Connect WebSocket (full mode), seals the window at 09:20 and shows the
+features on the **9:15 Confirm** tab. Needs a Kite Connect plan with market data (WebSocket, quotes, historical).
+
+### Daily pre-market routine
+
+1. Start the backend (`npm run server`, or the Windows start-up task) before **08:50**; keep the PC awake.
+2. **Log in to Kite** (Settings → Connect) before 09:15. Kite sessions expire every morning around 06:00, so log in
+   each trading day. Keep the app open once after logging in: the browser hands the session to the backend, which
+   holds it in memory only (never on disk, never logged).
+3. On the 9:15 Confirm tab, press **Check Kite setup**. It runs read-only calls only (instruments dump, one
+   historical request, one quote, an 8-second WebSocket subscription) and shows what came back.
+4. The 09:10 pre-open import triggers the preparation: the universe (gapped stocks above the minimum gap, the
+   watchlist, NIFTY 50, NIFTY BANK, matching sector indices, near-month futures of F&O stocks), instrument tokens
+   from that day's Kite dump, ATR(14) and the average 09:15–09:20 volume from Kite historical candles (3 requests a
+   second), and a `/quote` check of circuit limits and previous closes. It connects at **09:14**, seals at
+   **09:20:00** (+1.5 s for ticks still in flight) and disconnects at 09:30.
+
+### What is recorded
+
+- `.data/instruments/YYYY-MM-DD.json`: that day's tokens, tick and lot sizes, near-month futures.
+- `.data/history/YYYY-MM-DD.json`: ATR(14), average opening volume, futures' previous OI.
+- `.data/ticks/YYYY-MM-DD.ndjson.gz`: every tick 09:14–09:25 with the local receipt time and the exchange
+  timestamp, including five-level depth. Kite has no depth history, so this recording is the only source of depth
+  data for research.
+- `.data/opening/YYYY-MM-DD.json`: the sealed 09:20 features; `…-universe.json`: what was subscribed and why.
+
+### Troubleshooting and recovery
+
+- **Kite login needed / session expired**: log in again; the scanner shows *Kite login needed* before 09:15.
+- **WebSocket down**: the client reconnects with backoff (1, 2, 5, 10 s) and re-subscribes; after six attempts that
+  never connect (typically an expired login) it stops and says so. The confirmation checks below the scanner keep
+  working from `/quote` polling or the NSE fallback.
+- **Backend restarted**: before 09:20 it rebuilds the day and flags a late start as a *partial* window; after the
+  seal it shows the saved window and never collects again; started after 09:20 with nothing saved, the day is
+  marked *missed*. Holidays and years missing from `server/tv/holidays.json` fail closed.
+- **Replay simulated morning** runs a deterministic 13-stock morning through the same pipeline (no Kite needed).
+
+### Where each figure comes from
+
+| Figure | Source |
+|---|---|
+| LTP, last traded qty, cumulative volume, average traded price, total buy/sell qty, OHLC, OI, last trade time, exchange timestamp, five-level depth | Direct from Kite (WebSocket full mode) |
+| Official open, day high/low (= opening range at 09:20) | Direct from Kite (tick OHLC fields) |
+| VWAP | Kite's average traded price, labelled as such (includes the pre-open trade); no self-computed VWAP |
+| Gap %, 5-minute return, body and wick %, close position in the range, distance from VWAP and previous high/low | Calculated |
+| One-minute candles | Calculated from sampled ticks: highs/lows approximate (labelled) |
+| Window volume, volume per minute, acceleration | Calculated from cumulative volume (pre-open auction excluded; duplicates, out-of-order ticks and resets handled) |
+| RVOL | Calculated: window volume ÷ average 09:15–09:20 volume from Kite 1-minute historical candles |
+| ATR(14) | Calculated from Kite daily historical candles (completed days only) |
+| Imbalance (best, top-3, top-5), spread in ₹ and bps, liquidity, stability, liquidity drop, impact cost | Calculated from Kite depth; these are pending orders, not trades |
+| Depth history for research | Needs self-recorded data (Kite has none) |
+| Futures OI change | Calculated from Kite OI vs the previous close (Kite historical with OI), else the first tick of the day (labelled) |
+| Premium/discount, futures–spot agreement, build-up reading | Calculated; readings are conditional, not certain |
+| NIFTY 50, NIFTY BANK, sector index since open | Direct from Kite index ticks; relative strength calculated |
+| Breadth (% above previous close / VWAP) | Calculated over the tracked universe only, labelled; separate from NSE's exchange-wide advance/decline |
+| Circuit limits, previous close check | Direct from Kite `/quote` before 09:15 |
+| Option chain / PCR | Not available from Kite as a chain; not built |
+
 ## TV research: Zee Business + CNBC Awaaz
 
 Open **TV research** in the navigation. This is a Node.js scheduler plus React dashboard integrated into the existing application. It uses the **OpenAI API**, which is billed separately from a ChatGPT subscription; results appear here and in local files, not in ChatGPT website history.

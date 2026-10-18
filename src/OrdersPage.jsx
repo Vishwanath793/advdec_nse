@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './platform/index.js';
 import { indiaDate, istInstant, marketDay } from './core/calendar.js';
 import holidayCalendar from '../server/tv/holidays.json';
-import { ORDER_GRACE_MS, ORDER_WINDOW } from './core/orderScheduler.js';
+import { nextCheckDelay, ORDER_GRACE_MS, ORDER_WINDOW } from './core/orderScheduler.js';
 import { tickSize } from './utils/analysis.js';
 
+/** The Orders page re-sends the Kite session itself at most this often (normally the app does it). */
+const SHARE_RETRY_MS = 5 * 60_000;
 const QUICK_TIMES = ['09:15:00', '09:15:05', '09:20:00', '09:20:05', '09:30:00'];
 const STATUS_CLASS = { scheduled: 'unchanged', placing: 'unchanged', placed: 'advance', failed: 'decline', missed: 'decline', cancelled: '' };
 const rs = (n) => (n == null ? '—' : `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
@@ -39,7 +41,8 @@ function countdown(ms) {
  * Time-triggered orders: pick a stock, Buy or Sell, quantity, Market or
  * Limit, and the second it should be sent to Kite.
  */
-export default function OrdersPage({ stocks, settings, session, draft, onDraftUsed }) {
+export default function OrdersPage({ stocks, settings, session, draft, onDraftUsed, onShareSession, sessionShareError }) {
+  const lastShareRetry = useRef(0);
   const [now, setNow] = useState(() => new Date());
   const [orders, setOrders] = useState([]);
   const [scheduler, setScheduler] = useState(null); // { connected, userId }
@@ -71,23 +74,41 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
     try {
       const r = await api.scheduledOrders.list();
       setOrders(r.orders ?? []);
-      setScheduler(r.session ?? null);
+      // Safety net: the app re-sends the session when the backend reconnects; if the sender still
+      // has none, try again here, but at most once every few minutes.
+      const due = Date.now() - lastShareRetry.current > SHARE_RETRY_MS;
+      if (r.session && !r.session.connected && session?.access_token && onShareSession && due) {
+        lastShareRetry.current = Date.now();
+        const s = await onShareSession({ force: true });
+        setScheduler(s ?? r.session);
+      } else {
+        setScheduler(r.session ?? null);
+      }
     } catch (e) {
       setMessage({ type: 'error', text: `Could not load scheduled orders: ${e.message}` });
     }
+  }, [session, onShareSession]);
+
+  // The countdowns tick locally; no network.
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
   }, []);
 
-  // Tick every second for the countdowns; reload the list often only when an order is near.
+  // The list is loaded only when it can have changed: on opening the page, on coming back to
+  // it, and around each order's trigger time until its result is in. Adding and cancelling
+  // return the new list directly.
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
-    let last = 0;
-    const timer = setInterval(() => {
-      const t = new Date();
-      setNow(t);
-      const soon = orders.some((o) => (o.status === 'scheduled' && new Date(o.triggerAt) - t < 120_000) || o.status === 'placing');
-      if (t - last >= (soon ? 2_000 : 15_000)) { last = +t; refresh(); }
-    }, 1000);
-    return () => clearInterval(timer);
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [refresh]);
+  useEffect(() => {
+    const delay = nextCheckDelay(orders, Date.now());
+    if (delay == null) return undefined;
+    const timer = setTimeout(refresh, delay);
+    return () => clearTimeout(timer);
   }, [orders, refresh]);
 
   const triggerAt = form.date && /^\d{2}:\d{2}(:\d{2})?$/.test(form.time)
@@ -152,6 +173,9 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
         <div className="alert warn">The order sender has no Kite session yet; it gets it from this browser in a moment.</div>
       ) : (
         <div className="alert info">Kite connected{scheduler?.userId ? ` (${scheduler.userId})` : ''}: scheduled orders will be sent with this session.</div>
+      )}
+      {sessionShareError && (
+        <div className="alert error">Could not hand the Kite session to the order sender: {sessionShareError}. Scheduled orders will fail until this works; reload the page to try again.</div>
       )}
       {message && <div className={`alert ${message.type}`}>{message.text}</div>}
 
@@ -274,7 +298,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
                   <td><span className={`badge ${STATUS_CLASS[o.status]}`}>{o.status}</span></td>
                   <td className="wrap-cell order-detail">
                     {o.status === 'placed'
-                      ? `Kite order ${o.result?.orderId ?? '—'} sent ${o.result?.latencyMs != null ? `${o.result.latencyMs} ms after the time` : ''}. Check fills in Kite.`
+                      ? `Kite order ${o.result?.orderId ?? '—'}: sent ${o.result?.sendDelayMs ?? '?'} ms after the time, Kite confirmed in ${o.result?.kiteMs ?? '?'} ms${o.result?.attempts > 1 ? ' (retried once after a rate limit)' : ''}. Check fills in Kite.`
                       : o.result?.error ?? (o.status === 'cancelled' ? 'Cancelled before its time.' : '')}
                   </td>
                 </tr>

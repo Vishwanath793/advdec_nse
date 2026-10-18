@@ -10,6 +10,7 @@ import {
 } from './utils/confirmation.js';
 import { weightShares } from './utils/conviction.js';
 import { isTradeable } from './utils/tradeability.js';
+import OpeningScanner, { SourceBadge } from './OpeningScanner.jsx';
 
 const STATUS_ORDER = { confirmed: 0, mixed: 1, failing: 2, avoid: 3, failed: 4, 'no-data': 5 };
 const STATUS_CLASS = { confirmed: 'advance', mixed: 'unchanged', failing: 'decline', failed: 'decline', avoid: 'decline', 'no-data': '' };
@@ -18,13 +19,16 @@ const rs = (n) => (n == null ? '—' : Number(n).toLocaleString('en-IN', { minim
 const pct = (n) => (n == null ? '—' : `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(2)}%`);
 const time = (iso) => new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
 const LIMITS = [10, 20, 50, 0];
+/** After Kite refuses quotes, use NSE and try Kite again after this long (or after a new login). */
+const KITE_RETRY_MS = 10 * 60_000;
+const SOURCES = [['auto', 'Auto (Kite, else NSE)'], ['kite', 'Kite only'], ['nse', 'NSE only']];
 
 /**
  * 9:15–9:20 confirmation (Kite live quotes): which gaps are holding after the
  * open. The 9:20 reading is saved (opening range frozen) for the report card,
  * and later prices are compared with that range for the entry.
  */
-export default function ConfirmPage({ stocks, date, session, apiKey, checkSettings, blend, onSettings, onSchedule }) {
+export default function ConfirmPage({ stocks, date, session, apiKey, checkSettings, blend, sourcePref, onSettings, onSchedule }) {
   const [quotes, setQuotes] = useState({});
   const [updatedAt, setUpdatedAt] = useState(null);
   const [error, setError] = useState(null);
@@ -46,19 +50,43 @@ export default function ConfirmPage({ stocks, date, session, apiKey, checkSettin
     api.confirm.get(date).then(setSaved).catch(() => {});
   }, [date]);
 
+  // Price source: Kite when it works; otherwise NSE's website. In "auto", a Kite refusal (no
+  // market-data permission, expired login) switches to NSE and Kite is tried again only after
+  // KITE_RETRY_MS or a new login, not on every refresh.
+  const pref = ['auto', 'kite', 'nse'].includes(sourcePref) ? sourcePref : 'auto';
+  const kiteBlockedUntil = useRef(0);
+  const [kiteNote, setKiteNote] = useState(null); // why Kite isn't being used
+  const [source, setSource] = useState(null); // 'kite' | 'nse' for the prices shown
+  useEffect(() => { kiteBlockedUntil.current = 0; setKiteNote(null); }, [session?.access_token, apiKey, pref]);
+  const canFetch = gappers.length > 0 && (pref !== 'kite' || connected);
+  const noteShown = pref === 'nse' ? 'chosen in Prices' : !connected ? 'Kite is not connected' : kiteNote;
+
   const fetchQuotes = useCallback(async () => {
-    if (!connected || !gappers.length || busy.current) return;
+    if (!canFetch || busy.current) return;
     busy.current = true;
     setLoading(true);
+    // Nifty 50 and the sector indices too, for the market and sector checks.
+    const instruments = [...indexInstruments(gappers), ...gappers.map((s) => quoteKey(s.symbol))];
     try {
-      const fresh = await api.kite.quote({
-        apiKey,
-        accessToken: session.access_token,
-        // Nifty 50 and the sector indices too, for the market and sector checks.
-        instruments: [...indexInstruments(gappers), ...gappers.map((s) => quoteKey(s.symbol))],
-      });
+      let fresh = null;
+      let from = 'nse';
+      if (pref !== 'nse' && connected && (pref === 'kite' || Date.now() >= kiteBlockedUntil.current)) {
+        try {
+          fresh = await api.kite.quote({ apiKey, accessToken: session.access_token, instruments });
+          from = 'kite';
+          setKiteNote(null);
+        } catch (e) {
+          if (pref === 'kite') throw e;
+          kiteBlockedUntil.current = Date.now() + KITE_RETRY_MS;
+          setKiteNote(/insufficient permission/i.test(e.message)
+            ? 'Kite has no market-data permission for this app'
+            : `Kite quotes failed (${e.message})`);
+        }
+      }
+      if (!fresh) fresh = (await api.live.quote(instruments)).quotes;
       const at = new Date();
       setQuotes(fresh);
+      setSource(from);
       setUpdatedAt(at);
       setError(null);
       // From 9:20 on the trading day itself, keep the first reading (once).
@@ -70,12 +98,16 @@ export default function ConfirmPage({ stocks, date, session, apiKey, checkSettin
         }
       }
     } catch (e) {
-      setError(e.message);
+      // Kite's PermissionException: the Kite Connect plan has no market data.
+      setError(/insufficient permission/i.test(e.message)
+        ? 'Kite: refused live quotes ("Insufficient permission for that call"). Your Kite Connect app\'s plan doesn\'t include market data. '
+          + 'Enable a plan with live market data on developers.kite.trade and log in again, or choose Auto / NSE as the price source.'
+        : `${pref === 'kite' ? 'Kite' : 'Prices'}: ${e.message}`);
     } finally {
       busy.current = false;
       setLoading(false);
     }
-  }, [connected, gappers, apiKey, session, date, saved, checkSettings, blend]);
+  }, [canFetch, pref, connected, gappers, apiKey, session, date, saved, checkSettings, blend]);
 
   // Clock and polling: every 5 s from 9:14 to 9:25, then every 15 s until the close.
   useEffect(() => {
@@ -96,7 +128,7 @@ export default function ConfirmPage({ stocks, date, session, apiKey, checkSettin
   }, [date, fetchQuotes, updatedAt]);
 
   // One fetch when the page opens (or Kite connects), whatever the time.
-  useEffect(() => { fetchQuotes(); }, [connected, gappers.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchQuotes(); }, [canFetch, pref, connected, gappers.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const minutes = date ? minutesSinceOpen(now, date) : 5;
   const blendShare = Math.min(1, Math.max(0, (Number(blend) || 0) / 100));
@@ -114,6 +146,11 @@ export default function ConfirmPage({ stocks, date, session, apiKey, checkSettin
     const q = readQuote(quotes[key]);
     return q ? { key, name: key.replace(/^NSE:/, ''), q, pct: ((q.ltp - q.open) / q.open) * 100 } : null;
   }).filter(Boolean).sort((a, b) => (a.key === MARKET_INDEX ? -1 : b.key === MARKET_INDEX ? 1 : 0)), [gappers, quotes]);
+
+  // Checks the price source can't do, shown greyed out (not scored).
+  const naMarks = (live, group) => (live.unavailable ?? []).filter((u) => u.group === group).map((u) => (
+    <span key={u.key} className="check na" title={`${u.label}: needs Kite market data, skipped (not scored)`}>–</span>
+  ));
 
   const section = (dir) => {
     const list = rows
@@ -158,8 +195,8 @@ export default function ConfirmPage({ stocks, date, session, apiKey, checkSettin
   const customised = JSON.stringify(weights) !== JSON.stringify(checkWeights(DEFAULT_CHECK_SETTINGS))
     || Math.round(blendShare * 100) !== Math.round(DEFAULT_TRADE_BLEND * 100);
 
-  const banner = !connected
-    ? { type: 'warn', text: 'Connect Kite in Settings to get live prices. The confirmation needs Kite quotes from 9:15.' }
+  const banner = pref === 'kite' && !connected
+    ? { type: 'warn', text: 'Price source is “Kite only” but Kite is not connected: log in to Kite in Settings, or choose Auto or NSE.' }
     : !gappers.length
       ? { type: 'info', text: 'Load the pre-open first (9:10 fetch or Fetch now on the Analyzer page).' }
       : phase === 'closed'
@@ -216,11 +253,13 @@ export default function ConfirmPage({ stocks, date, session, apiKey, checkSettin
                     {live.checks.map((c) => (
                       <span key={c.key} className={`check ${c.result}`} title={`${c.label}: ${c.detail}`}>{CHECK_MARK[c.result]}</span>
                     ))}
+                    {naMarks(live, 'signal')}
                   </td>
                   <td className="confirm-checks">
                     {live.safety.map((c) => (
                       <span key={c.key} className={`check ${c.result}`} title={`${c.label}: ${c.detail}`}>{CHECK_MARK[c.result]}</span>
                     ))}
+                    {naMarks(live, 'safety')}
                   </td>
                   <td>
                     <span
@@ -233,6 +272,7 @@ export default function ConfirmPage({ stocks, date, session, apiKey, checkSettin
                         'Signals:',
                         ...live.checks.map((c) => `${CHECK_MARK[c.result]} ${c.label}: ${c.detail}`),
                         ...(live.safety.length ? ['Safety:', ...live.safety.map((c) => `${CHECK_MARK[c.result]} ${c.label}: ${c.detail}`)] : []),
+                        ...(live.unavailable?.length ? [`Skipped with NSE prices (need Kite market data): ${live.unavailable.map((u) => u.label).join(', ')}`] : []),
                       ].join('\n')}
                     >
                       {STATUS_LABEL[result.status] ?? result.status}{result.score != null ? ` ${result.score}` : ''}
@@ -286,16 +326,25 @@ export default function ConfirmPage({ stocks, date, session, apiKey, checkSettin
             <input type="checkbox" checked={tradeableOnly} onChange={(e) => setTradeableOnly(e.target.checked)} />
             Tradeable only
           </label>
-          <button type="button" className="btn" onClick={fetchQuotes} disabled={!connected || loading || !gappers.length}>
+          <label className="cap-filter" title="Where live prices come from. Auto uses Kite when it has market data, otherwise NSE's website.">
+            Prices
+            <select value={pref} onChange={(e) => onSettings({ liveSource: e.target.value })}>
+              {SOURCES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+            </select>
+          </label>
+          <button type="button" className="btn" onClick={fetchQuotes} disabled={!canFetch || loading}>
             {loading ? 'Updating…' : 'Refresh prices'}
           </button>
         </div>
       </div>
+      <OpeningScanner />
+
+      <h3 className="report-heading">Confirmation checks <SourceBadge source={source === 'kite' ? 'quote' : source} /></h3>
       <p className="hint">
-        After the open, each gap is checked with live Kite prices. <strong>Signals</strong> (scored): holding the
+        After the open, each gap is checked with live prices (Kite, or NSE’s website as a fallback). <strong>Signals</strong>: holding the
         open, position in the opening range, VWAP, gap not filled, volume against a normal day, order book, beyond
         yesterday’s high/low, Nifty 50 and the sector index since their open, and strength against Nifty.{' '}
-        <strong>Safety</strong> (not scored, ✗ means Avoid): room to the circuit, bid-ask spread, a recent trade,
+        <strong>Safety</strong> (✗ on the circuit or spread means Avoid): room to the circuit, bid-ask spread, a recent trade,
         stop distance, and not chasing past the entry. ✓ pass · • neutral · ⚠ caution · ✗ fail. Hover a mark or a
         result for details. {updatedAt && `Prices at ${time(updatedAt)}.`}
       </p>
@@ -371,7 +420,14 @@ export default function ConfirmPage({ stocks, date, session, apiKey, checkSettin
         </div>
       </details>
       <div className={`alert ${banner.type}`}>{banner.text}</div>
-      {error && <div className="alert error">Kite: {error}</div>}
+      {error && <div className="alert error">{error}</div>}
+      {source && !error && (
+        <div className={`alert ${source === 'nse' ? 'warn' : 'info'} price-source`}>
+          {source === 'kite'
+            ? 'Prices: Kite live quotes (all 15 checks).'
+            : `Prices: NSE website${noteShown ? ` (${noteShown})` : ''}. Order book, bid-ask spread and recent trade need Kite market data, so they are skipped and not scored; room to the circuit uses the app’s own limits. NSE prices can be a few seconds behind.`}
+        </div>
+      )}
       {indexChips.length > 0 && (
         <div className="market-signals" aria-label="Indices since the open">
           <span className="hint">Since the open:</span>
@@ -383,7 +439,7 @@ export default function ConfirmPage({ stocks, date, session, apiKey, checkSettin
           ))}
         </div>
       )}
-      {connected && gappers.length > 0 && (
+      {canFetch && (
         <div className="movers-grid">
           {renderTable(1)}
           {renderTable(-1)}

@@ -84,6 +84,13 @@ export function cleanCheckWeight(value) {
   return Number.isFinite(n) ? Math.min(MAX_CHECK_WEIGHT, Math.max(0, n)) : null;
 }
 
+/** Checks that need Kite market data; skipped (not scored) with NSE prices. */
+export const NSE_UNAVAILABLE = [
+  { key: 'book', label: 'Order book', group: 'signal' },
+  { key: 'spread', label: 'Bid-ask spread', group: 'safety' },
+  { key: 'fresh', label: 'Recent trade', group: 'safety' },
+];
+
 /** Effective weight per check from settings ({ key: { on, weight } }); off or 0 means not counted. */
 export function checkWeights(settings) {
   return Object.fromEntries(CONFIRM_CHECKS.map((c) => {
@@ -163,6 +170,9 @@ export function readQuote(q) {
     bid,
     ask,
     lastTradeAt: kiteTime(q.last_trade_time),
+    // NSE fallback quotes have no order book, bid/ask or last-trade time.
+    source: q.source === 'nse' ? 'nse' : 'kite',
+    hasDepth: Boolean(q.depth),
     quoteAt: kiteTime(q.timestamp),
   };
 }
@@ -273,7 +283,7 @@ export function confirmSetup(stock, q, {
     const spread = ((q.ask - q.bid) / ((q.ask + q.bid) / 2)) * 100;
     safe('spread', 'Bid-ask spread', spread >= SPREAD_AVOID_PCT ? 'fail' : spread >= SPREAD_WARN_PCT ? 'warn' : 'pass',
       `Bid ${rs(q.bid)} / ask ${rs(q.ask)}: ${spread.toFixed(2)}% spread${spread >= SPREAD_WARN_PCT ? ', costly to enter and exit' : ''}`);
-  } else if (q.quoteAt) {
+  } else if (q.hasDepth) {
     safe('spread', 'Bid-ask spread', 'warn', `No ${!q.bid ? 'buyers' : 'sellers'} in the order book right now`);
   }
   if (q.lastTradeAt && q.quoteAt) {
@@ -305,7 +315,9 @@ export function confirmSetup(stock, q, {
     : unsafe.length ? 'avoid'
       : score == null ? 'no-data'
         : score >= CONFIRMED_SCORE ? 'confirmed' : score <= FAILING_SCORE ? 'failing' : 'mixed';
-  return { status, score, checks, safety, range: { high, low }, plan, avoidReason: unsafe.map((c) => c.label).join(', ') || null };
+  // Checks this price source can't do (NSE has no order book, bid/ask or last-trade time).
+  const unavailable = q.source === 'nse' ? NSE_UNAVAILABLE : [];
+  return { status, score, checks, safety, range: { high, low }, plan, unavailable, avoidReason: unsafe.map((c) => c.label).join(', ') || null };
 }
 
 /**
@@ -343,12 +355,14 @@ export function confirmationReading(stocks, quotes, now, date, { checkSettings =
     const c = confirmFromQuotes(s, quotes, { minutes, checkSettings });
     readings[s.symbol] = {
       ltp: q.ltp, open: q.open, high: q.high, low: q.low, vwap: q.vwap, volume: q.volume, status: c.status, score: c.score,
+      source: q.source,
       tradeScore: tradeScore(s.convictionScore, c.score, blend),
     };
   }
   const nifty = readQuote(quotes[MARKET_INDEX]);
   return {
     date, at: now.toISOString(), late: istTime(now) > CONFIRM_LATE, readings,
+    source: Object.values(readings).some((x) => x.source === 'nse') ? 'nse' : 'kite',
     market: nifty ? { ltp: nifty.ltp, open: nifty.open, pct: fromOpen(nifty) } : null,
   };
 }

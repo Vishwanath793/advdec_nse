@@ -100,11 +100,28 @@ export default function App() {
   const clearOrderDraft = useCallback(() => setOrderDraft(null), []);
   // Hand the Kite session to the scheduled-order sender. Only set here, never cleared: a browser
   // without a login must not wipe the session another one gave (logout clears it explicitly).
-  useEffect(() => {
-    if (session?.access_token && settings.kiteApiKey) {
-      api.scheduledOrders.setSession({ apiKey: settings.kiteApiKey, accessToken: session.access_token, userId: session.user_id }).catch(() => {});
+  // Sent when the session changes and whenever the backend (re)connects (it keeps the session in
+  // memory only, so a restart loses it). No polling. A failure is shown, not retried in a loop.
+  const [sessionShareError, setSessionShareError] = useState(null);
+  const lastShare = useRef({ token: null, at: 0 });
+  const shareKiteSession = useCallback(async ({ force = false } = {}) => {
+    if (!session?.access_token || !settings.kiteApiKey) return null;
+    // The page load and the backend connection both ask at start-up: send once.
+    // Only a successful hand-off counts: one that failed (backend restarting) must not block the retry.
+    if (!force && lastShare.current.token === session.access_token && Date.now() - lastShare.current.at < 5_000) return null;
+    try {
+      const status = await api.scheduledOrders.setSession({ apiKey: settings.kiteApiKey, accessToken: session.access_token, userId: session.user_id });
+      lastShare.current = { token: session.access_token, at: Date.now() };
+      setSessionShareError(null);
+      return status;
+    } catch (e) {
+      setSessionShareError(e.message);
+      return null;
     }
   }, [session, settings.kiteApiKey]);
+  const shareKiteSessionRef = useRef(shareKiteSession);
+  shareKiteSessionRef.current = shareKiteSession;
+  useEffect(() => { shareKiteSession(); }, [shareKiteSession]);
   const [exportStatus, setExportStatus] = useState(null); // backend 9:30 auto-save status
 
   const loadBundledMaster = useCallback(() => {
@@ -225,6 +242,8 @@ export default function App() {
       setNseConnectionError(null);
     },
     (message) => setNseConnectionError(message),
+    // Connected or reconnected to the backend: it may have restarted and lost the Kite session.
+    () => shareKiteSessionRef.current(),
   ), []);
 
   useEffect(() => {
@@ -973,6 +992,8 @@ export default function App() {
           session={session}
           draft={orderDraft}
           onDraftUsed={clearOrderDraft}
+          onShareSession={shareKiteSession}
+          sessionShareError={sessionShareError}
         />
       ) : page === 'confirm' ? (
         <ConfirmPage
@@ -982,6 +1003,7 @@ export default function App() {
           apiKey={settings.kiteApiKey}
           checkSettings={settings.confirmChecks}
           blend={settings.confirmBlend}
+          sourcePref={settings.liveSource}
           onSettings={updateSetting}
           onSchedule={(d) => { setOrderDraft(d); window.location.hash = '#/orders'; }}
         />
