@@ -22,7 +22,7 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 | Who (name / account) | Branch | What | Started | Files / areas touched |
 |---|---|---|---|---|
-| — | — | Nothing in progress. Next planned: milestone 3 (research), **waiting for the owner's go-ahead** | — | — |
+| Another developer (owner to fill in the name) | — | Milestone 3: research (backtests, tick replay, report-card comparisons, exports) | 2026-10-18 | — |
 
 ---
 
@@ -40,6 +40,22 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 ---
 
 ## Entries (newest first)
+
+### 2026-10-18: Working copy moved to C:\Users\Public\advdec_nse (Vishwanath793 with Claude Code, android-app)
+**What changed:**
+- The project was copied to `C:\Users\Public\advdec_nse` so several Windows accounts can share it. The old
+  `C:\Users\DELL\advdec_nse` is a backup only.
+- `CLAUDE.md` now has the per-user setup and the corrected milestone status.
+- Milestone 3 is assigned to another developer.
+
+**Tests / checks:**
+- From the new folder: `npm test` (167 pass) and `npm run build`.
+- The backend and frontend started and the app loaded.
+
+**Not verified:** git and the app from the other Windows accounts.
+
+**Next / open questions:** each account runs `git config --global --add safe.directory C:/Users/Public/advdec_nse`
+once, and logs in to Kite again in its browser.
 
 ### 2026-10-18: Handoff docs: CLAUDE.md, DEVLOG.md, the spec in docs/ (Vishwanath793 with Claude Code, android-app, feea107 and later)
 **What changed:**

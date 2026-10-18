@@ -63,8 +63,8 @@ Run it:
 
 ## 2. The governing spec: the 09:20 opening-window trading system
 
-The full prompt the owner pasted is saved at `docs/prompt-920-trading-system.md`. That file is untracked; commit
-it if this repo is cloned elsewhere. Summary:
+The full prompt the owner pasted is saved at `docs/prompt-920-trading-system.md`. It is committed
+with the repo. Summary:
 
 Extend the app into a 09:20 Opening-Window Trading System on Zerodha Kite Connect. Keep everything that already
 happens before the open. Collect Kite WebSocket FULL-mode data from 09:15:00 to 09:19:59.999 IST, seal at
@@ -77,8 +77,8 @@ unverified, and wait for the go-ahead.**
 | # | Milestone | Status |
 |---|---|---|
 | 1 | Data collector (Kite WebSocket, seal at 09:20, recordings, scanner) | **Done**, commit 3599186 (pushed; Android CI green) |
-| 2 | 09:20 decision in PAPER (strategies, score, risk, paper broker, UI) | **Done**, commit 9274f4d (local; **not pushed yet**) |
-| 3 | Research: candle backtests, tick replay, report-card comparisons, exports | **Not started**: wait for the owner's go-ahead |
+| 2 | 09:20 decision in PAPER (strategies, score, risk, paper broker, UI) | **Done**, commit 9274f4d (pushed; Android CI green) |
+| 3 | Research: candle backtests, tick replay, report-card comparisons, exports | **Assigned to another developer** (see DEVLOG.md *Work in progress*); don't start it in parallel |
 | 4 | LIVE execution | **Not started**. Only after milestones 1–3 work, the data-quality checks pass, paper trading has run for a meaningful period, **and the owner explicitly says to start it** |
 
 **Rules from the spec. They still apply.**
@@ -344,7 +344,6 @@ Other modules:
 - Paper fills assume the visible five depth levels are available. Queue position, hidden liquidity and latency
   are not modelled.
 - The strategy thresholds and the R-multiple targets are untested hypotheses.
-- Commit 9274f4d has **not been pushed**, so its Android CI hasn't run.
 - The bundle is about 551 kB minified (177 kB gzipped). Avoid chart libraries; the chart is custom SVG.
 
 ---
