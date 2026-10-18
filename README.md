@@ -2,6 +2,10 @@
 
 Install with `npm install`, then run `npm run server` and `npm run dev` in separate terminals. Open http://127.0.0.1:5173.
 
+**Continuing development (including with Claude Code):** [CLAUDE.md](CLAUDE.md) has the full handoff: what each
+milestone built, the owner's rules, verified Kite API facts, an architecture map, what is still unverified, and
+the plan for milestones 3 and 4. The original 09:20 system spec is `docs/prompt-920-trading-system.md`.
+
 ## Daily NSE pre-open import
 
 Settings → NSE pre-open data controls the backend cron job. It defaults to enabled at 09:10 every day in Asia/Kolkata (IST), independent of the computer's timezone. Save NSE schedule applies changes immediately; Fetch now imports on demand.
