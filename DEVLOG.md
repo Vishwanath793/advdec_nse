@@ -23,7 +23,6 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 | Who (name / account) | Branch | What | Started | Files / areas touched |
 |---|---|---|---|---|
 | Another developer (owner to fill in the name) | — | Milestone 3: research (backtests, tick replay, report-card comparisons, exports) | 2026-10-18 | — |
-
 ---
 
 ## Entry template
@@ -40,6 +39,43 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 ---
 
 ## Entries (newest first)
+
+### 2026-10-18: Milestone 4 groundwork only (Vishwanath793 with Claude Code, android-app)
+The owner gave the go-ahead for milestone 4 (LIVE execution). Only this groundwork was done; **LIVE trading is
+still not available** (the desk forces PAPER, and `PUT /api/trading/settings` still refuses LIVE).
+
+**What changed:**
+- `src/core/kite.js`:
+  - New calls: `orders()` (GET /orders), `trades()` (GET /trades), `modifyOrder()` (PUT /orders/:variety/:id),
+    `cancelOrder()` (DELETE …), and an optional `timeoutMs`.
+  - A request that gets no response, or a 5xx, now throws a `KiteError` with `unknown: true` and status 0 / 5xx.
+    Kite may or may not have created the order, so it must be looked up, never resent.
+  - `isIpRejection()` for the static-IP refusal. The scheduled-order behaviour is unchanged: it retries only on a
+    429.
+- `src/utils/liveOrders.js` (pure, not used by anything yet):
+  - order tags (`liveTag`, alphanumeric, at most 20 characters)
+  - Kite order bodies for entry (SL / LIMIT), stop (SL-M, `market_protection: -1`), target (LIMIT IOC) and exit
+    (MARKET, protection −1)
+  - `readKiteOrder`, `classifyOrderError` (unknown / ip / session / rate / rejected), `liveConfirmText`,
+    `roundToTick`
+
+**Tests / checks:** new `server/liveOrders.test.js` (4 tests). `npm test` 171 pass; `npm run build` and
+`npx cap sync android` OK.
+
+**Not verified:** none of this has been called against Kite. No live order was placed.
+
+**Remaining for milestone 4:**
+- **A live broker:** send orders through the tags and a rate-spaced queue, poll the order book, reconcile unknown
+  outcomes by tag, rest an SL-M stop after the fills, IOC targets, entry expiry, square-off, the kill switch, an
+  append-only `.data/live/` log, and reconciliation after a restart.
+- **Wiring into the trading desk:** arming each day (Settings switch + typed `LIVE YYYY-MM-DD` + a check that the
+  static IP matches the PC's public IP + a valid session; memory only), sizing from Kite margins, and keeping the
+  follow tokens for live positions.
+- **Routes and UI:** arm/disarm and the live ledger in the trading panel; a LIVE badge.
+- **Tests:** with a fake Kite client only (no live API calls).
+
+Forum source for the IP rule (not in the official order docs): an order from an IP that isn't whitelisted is
+rejected with "IP (…) is not allowed to place orders for this app".
 
 ### 2026-10-18: Working copy moved to C:\Users\Public\advdec_nse (Vishwanath793 with Claude Code, android-app)
 **What changed:**
