@@ -22,7 +22,7 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 | Who (name / account) | Branch | What | Started | Files / areas touched |
 |---|---|---|---|---|
-| Another developer (owner to fill in the name) | — | Milestone 3: research (backtests, tick replay, report-card comparisons, exports) | 2026-10-18 | — |
+| — (open; owner to assign) | android-app | Milestone 3 part 2: Kite historical candle download + cache, server routes, Research section on the Report card page with Excel export | — | see the 2026-10-18 "Milestone 3 part 1" entry |
 ---
 
 ## Entry template
@@ -39,6 +39,64 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 ---
 
 ## Entries (newest first)
+
+### 2026-10-18: Milestone 3 part 1: the backtest engine (Vishwanath793 with Claude Code, android-app)
+The owner reassigned milestone 3 from the other developer. Part 1 is the pure research engine and its tests;
+part 2 (data download, routes, UI, export) is open.
+
+**What changed:**
+- `src/utils/candleWindow.js`: the 09:20 features from Kite 1-minute candles, in the same shape as the live
+  window. There is no order book, F&O or circuit limits (left out, not invented), and VWAP comes from the candles.
+  It never looks past 09:20.
+- `strategies.js`, `confirmation.js`, `tradePlan.js`: for `source: 'candles'`, the order-book checks are marked
+  "not tested", factor sources are relabelled, and a missing minute is a hard rejection. **Live behaviour is
+  unchanged.**
+- `src/utils/candleFills.js`: candle fills. Every ambiguity counts against the trade:
+  - A minute with both the stop and a target counts as the stop.
+  - Entries fill at the worse of the trigger and the open, plus slippage, within the maximum entry.
+  - A gap through the stop fills at the open.
+  - Targets are limit fills; T2 counts only after T1.
+  - Entries expire; square-off closes what's left; the daily-loss and losing-streak limits are checked at the
+    trigger.
+- `src/utils/backtestStats.js`: trades, win rate, average win/loss, profit factor, net after costs, maximum
+  drawdown, expectancy (₹ and R), average reward/risk, longest losing streak, and breakdowns by gap, RVOL, sector
+  and regime.
+- `src/utils/backtestRunner.js`:
+  - Six comparisons: combined, A, B, C, a simple opening-range baseline, and conviction alone (recorded days
+    only).
+  - Slippage sensitivity (0/5/10/20 bps) and parameter sweeps (minimum score, A's minimum RVOL, C's maximum
+    distance from VWAP).
+  - A 70/30 out-of-sample split, and walk-forward over 4 chronological folds (choosing the minimum score in-sample).
+  - The limitations listed.
+- `src/utils/tickReplay.js`: recorded mornings through the live window → decision → paper ledger. Positions are
+  closed at the last bid/ask when the recording ends.
+- `src/utils/ticksToCandles.js`: ticks → 1-minute candles.
+
+**Tests / checks:**
+- `server/backtest.test.js` (11 tests: features, no look-ahead, "not tested" book checks, every fill rule,
+  statistics, the runner, tick replay).
+- `npm test`: 187 pass.
+- On the simulated morning, candles and paper agree: ORBUP hits T1 and T2, and MOMO is stopped out.
+
+**Finding:** B and C alone took no trades on the simulated morning. Both failed reward/risk after costs (1.35 and
+1.40, below 1.5), the same cost effect as milestone 2.
+
+**Not verified:** nothing has run on real historical candles yet, and no recorded tick mornings exist yet.
+
+**Part 2, to do:**
+1. **Data:** `src/core/backtestData.js`, read-only Kite historical calls through `createRateLimiter(3)`, cached
+   under `.data/candles/`:
+   - daily candles per symbol, for gaps, the previous day's high/low/close, and ATR from earlier days only
+   - 5-minute candles in chunks of up to 100 days, for the RVOL baseline (the 09:15 candle) and the index moves
+   - 1-minute candles for each candidate stock-day (the top N by gap at the open)
+
+   Use recorded days' snapshots, master lists and conviction where they exist. Skip gaps above 20%.
+2. **Routes:** `server/researchRoutes.js`, same-origin only. A background job with progress and a cancel option
+   that calls `runBacktest`, plus tick replay over `.data/ticks/` (`tickLog.read`).
+3. **UI:** a Research section on the Report card page with a BACKTEST badge: the period, the maximum stocks per
+   day, the comparison table, the breakdowns, the sensitivity and walk-forward results, the trade list, the
+   limitations, and Excel export through `buildXlsx` in `exportStocks.js`. Hide it on Android (no backend).
+4. README section, DEVLOG entry, then `npm test` / `npm run build` / `npx cap sync android`.
 
 ### 2026-10-18: Milestone 4 groundwork only (Vishwanath793 with Claude Code, android-app)
 The owner gave the go-ahead for milestone 4 (LIVE execution). Only this groundwork was done; **LIVE trading is

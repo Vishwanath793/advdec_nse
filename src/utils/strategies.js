@@ -42,12 +42,17 @@ export function strategySettings(input = {}) {
 function make(strategy) {
   const checks = [];
   const check = (key, label, ok, detail) => { checks.push({ key, label, ok: Boolean(ok), detail }); return Boolean(ok); };
+  // Candle backtests have no order book: book checks are recorded as not tested, not as passed on made-up data.
+  const untested = (key, label) => { checks.push({ key, label, ok: true, untested: true, detail: NO_BOOK }); return true; };
+  check.book = (f, key, label, ok, detail) => (noBook(f) ? untested(key, label) : check(key, label, ok, detail));
   const result = (fields) => ({ strategy, label: STRATEGY_LABEL[strategy], checks, ...fields, pass: fields.applies && checks.every((c) => c.ok) && Boolean(fields.signal) });
   return { check, result };
 }
 
+const NO_BOOK = 'not tested: candle data has no order book';
+const noBook = (f) => f.source === 'candles';
 const sectorAgainst = (f, dir, tol) => f.market?.sector && dir * f.market.sector.pct < -tol;
-const liquid = (check, f, maxBps) => check('spread', 'Spread and book', f.depth && f.depth.spreadBps <= maxBps,
+const liquid = (check, f, maxBps) => check.book(f, 'spread', 'Spread and book', f.depth && f.depth.spreadBps <= maxBps,
   f.depth ? `${f2(f.depth.spreadBps)} bps (max ${maxBps})` : 'no live two-sided order book');
 
 /** A. Opening-range breakout (long) or breakdown (short). */
@@ -107,7 +112,7 @@ export function gapUpPullbackRecovery(f, cfg = DEFAULT_STRATEGY_SETTINGS.gapPull
   const volRatio = sellRate > 0 ? buyRate / sellRate : null;
   check('volume', 'Recovery volume stronger than the selling', volRatio != null && volRatio >= cfg.minRecoveryVolumeRatio,
     volRatio == null ? 'no volume during the pullback' : `${f2(volRatio)}× the pullback's volume per minute (min ${cfg.minRecoveryVolumeRatio}); weaker means a dead-cat bounce`);
-  check('book', 'Book not offer-heavy', f.depth != null && f.depth.imbalance5 >= cfg.minImbalance,
+  check.book(f, 'book', 'Book not offer-heavy', f.depth != null && f.depth.imbalance5 >= cfg.minImbalance,
     f.depth ? `top-5 imbalance ${f2(f.depth.imbalance5)} (change ${f2(f.depth.imbalanceChange)}; pending orders, not trades)` : 'no order book');
   if (f.fo && !f.fo.missing) check('fo', 'Futures not in short build-up', f.fo.build !== 'short build-up', `${f.fo.build ?? 'no reading'}`);
   liquid(check, f, cfg.maxSpreadBps);
@@ -143,7 +148,7 @@ export function openingMomentum(f, cfg = DEFAULT_STRATEGY_SETTINGS.momentum) {
   const nifty = f.market?.nifty;
   check('market', 'Nifty and sector aligned', nifty && dir * nifty.pct > 0 && !(f.market?.sector && dir * f.market.sector.pct <= 0),
     `Nifty ${f2(nifty?.pct)}%${f.market?.sector ? `, ${f.market.sector.symbol} ${f2(f.market.sector.pct)}%` : ', no sector index'}`);
-  check('book', 'Stable book on the right side', f.depth != null && dir * f.depth.imbalance5 >= cfg.minImbalance && (f.depth.stability == null || f.depth.stability >= cfg.minStability),
+  check.book(f, 'book', 'Stable book on the right side', f.depth != null && dir * f.depth.imbalance5 >= cfg.minImbalance && (f.depth.stability == null || f.depth.stability >= cfg.minStability),
     f.depth ? `imbalance ${f2(f.depth.imbalance5)}, stability ${f2(f.depth.stability)} (pending orders, not trades)` : 'no order book');
   check('notExtended', 'Not overextended', f.vwapDistPct != null && dir * f.vwapDistPct <= cfg.maxVwapDistPct && dir * f.ret5Pct <= cfg.maxRet5Pct && (f.orRangeAtr == null || f.orRangeAtr <= cfg.maxRangeAtr),
     `${f2(f.vwapDistPct)}% from VWAP (max ${cfg.maxVwapDistPct}), ${f2(f.ret5Pct)}% since the open (max ${cfg.maxRet5Pct}), range ${f2(f.orRangeAtr)}× ATR`);
