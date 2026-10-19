@@ -31,8 +31,15 @@ export async function sha256Hex(text) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Exchanges whose contracts have freeze quantities, where Kite's `autoslice` applies.
+ * For NSE/BSE equity Kite rejects it ("Cannot autoslice this instrument"), so it isn't sent.
+ */
+export const AUTOSLICE_EXCHANGES = ['NFO', 'BFO', 'MCX', 'CDS', 'BCD'];
+
 /** Kite's order form fields (the variety goes in the URL path). */
 export function orderForm(order) {
+  const autoslice = order.autoslice !== undefined && AUTOSLICE_EXCHANGES.includes(order.exchange);
   return new URLSearchParams({
     exchange: order.exchange,
     tradingsymbol: order.tradingsymbol,
@@ -45,7 +52,7 @@ export function orderForm(order) {
     ...(order.trigger_price !== undefined ? { trigger_price: String(order.trigger_price) } : {}),
     ...(order.disclosed_quantity !== undefined ? { disclosed_quantity: String(order.disclosed_quantity) } : {}),
     ...(order.market_protection !== undefined ? { market_protection: String(order.market_protection) } : {}),
-    ...(order.autoslice !== undefined ? { autoslice: String(!!order.autoslice) } : {}),
+    ...(autoslice ? { autoslice: String(!!order.autoslice) } : {}),
     ...(order.tag ? { tag: order.tag } : {}),
   });
 }

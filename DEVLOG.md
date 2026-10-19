@@ -40,6 +40,32 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-19: Fix "Cannot autoslice this instrument" for NSE share orders (Vishwanath793 with Claude Code, android-app)
+**What changed:**
+- A scheduled MARKET sell of URBANCO (an NSE share) was rejected by Kite: "Cannot autoslice this instrument".
+  The "Auto-slice above freeze qty" setting (on by default) sent `autoslice=true` with every market order.
+- `orderForm` in `src/core/kite.js` now sends `autoslice` only for derivatives exchanges (`AUTOSLICE_EXCHANGES`:
+  NFO, BFO, MCX, CDS, BCD), where freeze quantities apply. This covers scheduled orders, the Analyzer's BUY/SELL
+  buttons and the Android app.
+- The Settings label explains that the option is F&O only.
+
+**Tests / checks:** `server/kite.test.js` (not sent for NSE, sent for NFO) and `orderScheduler.test.js`.
+`npm test`: 187 pass. `npm run build` and `npx cap sync android` OK. The backend was restarted with the fix.
+
+**Context from the same morning:**
+- The 09:15 PERSISTENT order and a 09:46 PNB order failed: there was no valid Kite login for the day.
+- The owner then hit "No IPs configured for this app" (the static-IP rule) and whitelisted the PC's IP in the Kite
+  developer console (Profile → IP Whitelist). The URBANCO rejection shows the IP check now passes.
+- The 09:15–09:20 opening window was missed (the backend was stopped about 09:21).
+
+**Not verified:** no order has been placed since the fix.
+
+**Open (worth doing):**
+- Treat a Kite login from before 06:00 IST today as expired (Kite's `login_time`): warn on the Orders page and
+  don't hand it to the backend.
+- Label the static-IP refusal (it arrives as a 403) as an IP problem, not "session expired", in
+  `orderScheduler.js`.
+
 ### 2026-10-18: Milestone 3 part 1: the backtest engine (Vishwanath793 with Claude Code, android-app)
 The owner reassigned milestone 3 from the other developer. Part 1 is the pure research engine and its tests;
 part 2 (data download, routes, UI, export) is open.

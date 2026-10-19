@@ -339,7 +339,7 @@ test('the Kite request: POST /orders/regular with exactly the right form fields'
   assert.equal(calls[0].init.headers['X-Kite-Version'], '3');
   assert.deepEqual(Object.fromEntries(new URLSearchParams(calls[0].init.body)), {
     exchange: 'NSE', tradingsymbol: 'INFY', transaction_type: 'BUY', quantity: '10', product: 'MIS',
-    order_type: 'MARKET', validity: 'DAY', market_protection: '-1', autoslice: 'true', tag: 'ADVDC',
+    order_type: 'MARKET', validity: 'DAY', market_protection: '-1', tag: 'ADVDC', // no autoslice for NSE equity
   });
   const limit = validateScheduledOrder({ ...base, side: 'SELL', orderType: 'LIMIT', price: 1503.4, product: 'CNC', triggerAt: ist(MONDAY, '09:20:00').toISOString() }, now, calendar).order;
   await kite.placeOrder({ apiKey: 'key', accessToken: 'tok', order: kiteOrderFor(limit) });

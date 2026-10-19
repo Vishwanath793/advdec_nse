@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createKiteClient, KiteError, sha256Hex, summarizeMargins } from '../src/core/kite.js';
+import { createKiteClient, KiteError, orderForm, sha256Hex, summarizeMargins } from '../src/core/kite.js';
 
 function mockFetch(routes) {
   const calls = [];
@@ -40,8 +40,11 @@ test('orders go to /orders/<variety> with the auth header', async () => {
   assert.equal(calls[0].headers.Authorization, 'token k:t');
   const form = new URLSearchParams(calls[0].body);
   assert.equal(form.get('quantity'), '2');
-  assert.equal(form.get('autoslice'), 'true');
+  // NSE equity: Kite rejects autoslice ("Cannot autoslice this instrument"), so it isn't sent.
+  assert.equal(form.has('autoslice'), false);
   assert.equal(form.has('variety'), false);
+  // F&O contracts have freeze quantities: there it is sent.
+  assert.equal(orderForm({ ...order, exchange: 'NFO', tradingsymbol: 'NIFTY26OCTFUT' }).get('autoslice'), 'true');
 });
 
 test('account summary reads /user/margins/equity fields', async () => {
