@@ -289,6 +289,23 @@ test('with the real Kite client, no response from Kite fails the order once, nev
   assert.match(o.result.error, /no response from Kite.*check your Kite order book before placing it again/);
 });
 
+test('regression: a scheduled MARKET sell of an NSE share goes to Kite without autoslice (Kite rejects it there)', async () => {
+  // The 19 Oct failure: SELL 1 URBANCO market MIS with "Auto-slice above freeze qty" on (the default).
+  const clock = fakeTime(ist(MONDAY, '10:08:50'));
+  const sent = [];
+  const kite = createKiteClient({
+    fetchImpl: async (url, init) => { sent.push({ url, form: Object.fromEntries(new URLSearchParams(init.body)) }); return { ok: true, status: 200, json: async () => ({ data: { order_id: 'u1' } }) }; },
+  });
+  const sched = scheduler(clock, (a) => kite.placeOrder(a));
+  await sched.add({ ...base, symbol: 'URBANCO', side: 'SELL', quantity: 1, orderType: 'MARKET', product: 'MIS', autoslice: true, triggerAt: ist(MONDAY, '10:09:00').toISOString() });
+  await clock.advance(15_000);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, 'https://api.kite.trade/orders/regular');
+  assert.equal('autoslice' in sent[0].form, false);
+  assert.deepEqual([sent[0].form.exchange, sent[0].form.tradingsymbol, sent[0].form.transaction_type, sent[0].form.order_type, sent[0].form.market_protection], ['NSE', 'URBANCO', 'SELL', 'MARKET', '-1']);
+  assert.equal((await sched.list())[0].status, 'placed');
+});
+
 test('a session set after scheduling is used; cancelling while sending is refused', async () => {
   const clock = fakeTime(ist(MONDAY, '09:14:00'));
   let release;
