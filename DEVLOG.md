@@ -22,7 +22,7 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 | Who (name / account) | Branch | What | Started | Files / areas touched |
 |---|---|---|---|---|
-| — (open; owner to assign) | android-app | Milestone 3 part 2: Kite historical candle download + cache, server routes, Research section on the Report card page with Excel export | — | see the 2026-10-18 "Milestone 3 part 1" entry |
+| Vishwanath793 with Claude Code (DELL) — **paused** | android-app | Milestone 3 part 2: Kite historical candle download + cache, server routes, Research section on the Report card page with Excel export. Uncommitted in the shared folder: `src/core/backtestData.js` (planner + candle cache, loads) and `server/backtestData.test.js` (cut off, not in the test script) | 2026-10-19 | new src/core/backtestData.js, server/researchRoutes.js, src/ResearchPanel.jsx; src/ReportCardPage.jsx, src/platform/web.js, server/index.js; tests |
 ---
 
 ## Entry template
@@ -39,6 +39,26 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 ---
 
 ## Entries (newest first)
+
+### 2026-10-19: New default conviction factors in the Analyzer (Vishwanath793 with Claude Code, android-app)
+**What changed:** at the owner's request, "Reset to defaults" now gives gap size 15, buy/sell orders 100,
+pre-open value 100 and relative volume 100 (shares 5/32/32/31%). Everything else is off, keeping its weight:
+sector 10, F&O OI 100, India VIX 30, the rest 20. This was the owner's choice, not re-derived from the report card;
+the comments in `src/utils/conviction.js` say so.
+- `FACTOR_DEFAULTS_VERSION` is now 3. Untouched version-1 or version-2 defaults migrate automatically; customised
+  settings are kept.
+- The help text in the Analyzer was updated.
+
+**Tests / checks:**
+- `conviction.test.js`: the new defaults, the shares, and the migration from version 2.
+- Three scoring-mechanics tests now pin V1 or use a factor that is on by default.
+- `marketSignals.test.js`: relative volume is now reported missing when there's no volume history.
+- `npm test`: 190 pass; build and Android sync OK.
+- In the app: the factor list matches the owner's screenshot, and "Reset to defaults" is disabled when the settings
+  equal the defaults.
+
+**Not verified:** whether these defaults rank better than version 2. Check the Report card as more days are
+recorded.
 
 ### 2026-10-19: Fix "Cannot autoslice this instrument" for NSE share orders (Vishwanath793 with Claude Code, android-app)
 **What changed:**

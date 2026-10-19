@@ -110,7 +110,8 @@ test('delivery, close location and trend score in the gap direction', () => {
   assert.equal(factor(score({ prevHigh: 102, prevLow: 98, prevClose: 100.1, prevDelivery: 90, avgDelivery: 30, close1: 100 }).up, 'delivery').value, 0.5);
   // Missing history: the factors are reported as missing, not guessed.
   const bare = score({ prevHigh: 102, prevLow: 98, prevClose: 101 }).up;
-  assert.deepEqual(bare.conviction.missing, ['Buy/sell orders', 'Delivery % (yesterday)', 'Trend (5 & 20 sessions)', 'GIFT Nifty', 'India VIX change', 'FII/DII flows']);
+  // Relative volume is on by default (version 3) and has no volume history here: reported missing too.
+  assert.deepEqual(bare.conviction.missing, ['Buy/sell orders', 'Relative volume', 'Delivery % (yesterday)', 'Trend (5 & 20 sessions)', 'GIFT Nifty', 'India VIX change', 'FII/DII flows']);
 });
 
 test('GIFT Nifty, VIX and FII flows tilt gap-ups and gap-downs in opposite directions', () => {
