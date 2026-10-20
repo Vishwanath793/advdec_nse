@@ -26,6 +26,7 @@ import ReportCardPage from './ReportCardPage.jsx';
 import ConfirmPage from './ConfirmPage.jsx';
 import OrdersPage from './OrdersPage.jsx';
 import { ModeBadge } from './TradingPanel.jsx';
+import { MarketResearch, RESEARCH_COLUMNS, ResearchCells, SectorBreadthCell } from './ResearchColumns.jsx';
 import { formatIST } from './NseScheduleSettings.jsx';
 import { loadSettings, saveSettings, loadSession, saveSession } from './store.js';
 
@@ -704,6 +705,8 @@ export default function App() {
     return { on: typeof s?.on === 'boolean' ? s.on : d.on, weight: cleanWeight(s?.weight) ?? d.weight };
   };
   const activeWeights = factorWeights(settings.convictionFactors);
+  const showResearch = Boolean(settings.showResearch);
+  const stockColumns = showResearch ? [...STOCK_COLUMNS, ...RESEARCH_COLUMNS] : STOCK_COLUMNS;
   const activeShares = weightShares(activeWeights);
   const activeCount = Object.values(activeWeights).filter(Boolean).length;
   const checkedCount = CONVICTION_FACTORS.filter((f) => factorSetting(f.key).on).length;
@@ -1258,6 +1261,7 @@ export default function App() {
           )}
 
           {renderMarketSignals()}
+          <MarketResearch context={marketContext} />
 
           {/* Conviction factor controls */}
           <details className="conviction-settings">
@@ -1498,16 +1502,25 @@ export default function App() {
                 />
                 Tradeable only
               </label>
+              <label className="cap-filter" title="Columns comparing each stock with its own last 20 sessions. For research: not in the conviction score.">
+                <input
+                  type="checkbox"
+                  checked={showResearch}
+                  onChange={(e) => updateSetting({ showResearch: e.target.checked })}
+                />
+                Research columns (vs 20 sessions)
+              </label>
             </div>
             <div className="table-wrap tall">
               <table className="stock-table">
                 <thead>
                   <tr>
-                    {STOCK_COLUMNS.map(({ key, label, numeric }) => (
+                    {stockColumns.map(({ key, label, numeric, research, title }) => (
                       <th
                         key={key}
                         scope="col"
-                        className={numeric ? 'num sortable' : 'sortable'}
+                        title={title}
+                        className={`${numeric ? 'num sortable' : 'sortable'}${research ? ' research-col' : ''}`}
                         aria-sort={stockSort.key === key
                           ? (stockSort.direction === 'asc' ? 'ascending' : 'descending')
                           : 'none'}
@@ -1553,11 +1566,21 @@ export default function App() {
                           {s.status === 'advance' ? '▲ Adv' : s.status === 'decline' ? '▼ Dec' : '● Unch'}
                         </span>
                       </td>
+                      {showResearch && <ResearchCells s={s} />}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            {showResearch && (
+              <p className="hint">
+                Research columns compare each stock with its own previous 20 completed sessions (never including today);
+                hover a cell for the figures and how many sessions had data. Ratios of 2× or more are highlighted. Pre-open
+                RVOL and value use the pre-open days this app has recorded ({marketContext?.preopen?.days ?? 0} so far);
+                delivery, gaps and returns use NSE&apos;s end-of-day files; OI uses NSE&apos;s F&amp;O files. They are not
+                in the conviction score until the report card shows they help.
+              </p>
+            )}
             <p className="hint">
               Conviction (0–100) scores how strongly the pre-open supports the gap continuing. Factors in use:{' '}
               {CONVICTION_FACTORS.filter((f) => activeWeights[f.key]).map((f) => `${f.label} ${activeWeights[f.key]}`).join(' · ') || 'none'}
@@ -1690,6 +1713,11 @@ export default function App() {
                     <th className="num sortable" onClick={() => toggleSort('ratio')}>
                       A/D{sortIndicator('ratio')}
                     </th>
+                    {showResearch && (
+                      <th className="num research-col" title="Advancing % today minus the sector's average advancing % in the recorded pre-open days (up to 20), in percentage points">
+                        Adv % vs usual
+                      </th>
+                    )}
                     <th className="bar-col">Breadth</th>
                   </tr>
                 </thead>
@@ -1720,6 +1748,7 @@ export default function App() {
                         <td className="num">
                           {ratio === null ? '—' : ratio === Infinity ? '∞' : ratio.toFixed(2)}
                         </td>
+                        {showResearch && <SectorBreadthCell s={s} />}
                         <td className="bar-col">
                           <div className="mini-bar">
                             <div className="seg adv" style={{ width: `${a}%` }} />

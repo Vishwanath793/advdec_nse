@@ -28,6 +28,8 @@ test('end-of-day files give yesterday\'s range and average volume', () => {
   assert.deepEqual(historyStats([day1, day2]).HCLTECH, {
     prevHigh: 1236.8, prevLow: 1206, prevClose: 1223, avgVolume: 2500000, volumeDays: 2,
     prevDelivery: 1, avgDelivery: null, close1: 1216.7, close5: null, close20: null,
+    // Research: delivered shares (quantity × delivery %) and the opening gap vs the previous close.
+    prevDelivQty: 20000, avgDelivQty: 30000, delivQtyDays: 1, avgAbsGap: Math.abs(1223 / 1216.7 - 1) * 100, gapDays: 1,
   });
   assert.throws(() => parseBhavcopy('A,B\n1,2'), /Unexpected end-of-day file format/);
 });

@@ -6,13 +6,19 @@ import { indiaDate, previousTradingDays } from './calendar.js';
  *  - atr14: average true range of the 14 completed daily candles before today;
  *  - openVol5Avg: average 09:15–09:20 volume over the last OPENING_VOLUME_DAYS
  *    sessions (sum of the five 1-minute candles), the RVOL baseline;
+ *  - openValueAvg: average 09:15–09:20 traded value (₹, each minute's volume ×
+ *    its typical price (high + low + close) / 3) over the same sessions;
+ *  - openRangePctAvg: average 09:15–09:20 high–low range as % of the 09:15 open;
  *  - prevOi (F&O): the near-month future's open interest at the previous close,
  *    the baseline for the OI change.
  */
 
 export const HISTORY_RATE_PER_SECOND = 3;
 export const ATR_PERIOD = 14;
-export const OPENING_VOLUME_DAYS = 10;
+/** 20 completed sessions, the same look-back as the other research comparisons. */
+export const OPENING_VOLUME_DAYS = 20;
+/** Bump when the cached fields change, so older cache entries are fetched again. */
+const HISTORY_VERSION = 2;
 const file = (date) => `history/${date}.json`;
 const ist = (d) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
 
@@ -29,19 +35,39 @@ export function atrFromDayCandles(candles, today, period = ATR_PERIOD) {
   return trs.reduce((a, b) => a + b, 0) / trs.length;
 }
 
-/** Average 09:15–09:20 volume over days that have all five 1-minute candles. */
-export function openingVolumeAverage(minuteCandles, today) {
+/** Per session before `today` with all five 09:15–09:19 1-minute candles: volume, value (₹) and range (% of the open). */
+export function openingWindowDays(minuteCandles, today) {
   const byDay = new Map();
-  for (const [t, , , , , v] of minuteCandles) {
+  for (const [t, o, h, l, c, v] of minuteCandles) {
     const d = indiaDate(t);
     const time = ist(t);
     if (d >= today || time < '09:15' || time >= '09:20') continue;
-    const day = byDay.get(d) ?? byDay.set(d, { volume: 0, candles: 0 }).get(d);
+    const day = byDay.get(d) ?? byDay.set(d, { volume: 0, value: 0, candles: 0, open: null, first: Infinity, high: -Infinity, low: Infinity }).get(d);
     day.volume += v;
+    day.value += v * ((h + l + c) / 3);
     day.candles += 1;
+    if (+t < day.first) { day.first = +t; day.open = o; }
+    day.high = Math.max(day.high, h);
+    day.low = Math.min(day.low, l);
   }
-  const complete = [...byDay.values()].filter((d) => d.candles === 5);
-  return complete.length ? { avg: complete.reduce((s, d) => s + d.volume, 0) / complete.length, days: complete.length } : null;
+  return [...byDay.values()].filter((d) => d.candles === 5)
+    .map((d) => ({ volume: d.volume, value: d.value, rangePct: d.open > 0 ? ((d.high - d.low) / d.open) * 100 : null }));
+}
+
+const avgOf = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
+
+/** Average 09:15–09:20 volume over days that have all five 1-minute candles. */
+export function openingVolumeAverage(minuteCandles, today) {
+  const days = openingWindowDays(minuteCandles, today);
+  return days.length ? { avg: avgOf(days.map((d) => d.volume)), days: days.length } : null;
+}
+
+/** Average 09:15–09:20 volume, value and range over complete days: the research baselines. */
+export function openingWindowAverages(minuteCandles, today) {
+  const days = openingWindowDays(minuteCandles, today);
+  if (!days.length) return null;
+  const ranges = days.map((d) => d.rangePct).filter((r) => r != null);
+  return { volume: avgOf(days.map((d) => d.volume)), value: avgOf(days.map((d) => d.value)), rangePct: avgOf(ranges), days: days.length };
 }
 
 /** A pacer: `run(fn)` starts fn no sooner than 1/perSecond after the previous start. */
@@ -65,7 +91,7 @@ export function createRateLimiter(perSecond, { now = () => Date.now(), setTimer 
 
 /**
  * `kite` is the shared Kite client. `load(items, session)` with items
- * [{ symbol, token, futureToken? }] returns { SYMBOL: { atr14, openVol5Avg, openVolDays, prevOi } }.
+ * [{ symbol, token, futureToken? }] returns { SYMBOL: { atr14, openVol5Avg, openValueAvg, openRangePctAvg, openVolDays, prevOi } }.
  */
 export function createHistoryService({ store, kite, calendar, now = () => new Date(), limiter = createRateLimiter(HISTORY_RATE_PER_SECOND) }) {
   async function load(items, { apiKey, accessToken }, { onProgress = () => {} } = {}) {
@@ -73,19 +99,19 @@ export function createHistoryService({ store, kite, calendar, now = () => new Da
     const cached = (await store.read(file(today))) ?? {};
     const days = previousTradingDays(today, Math.max(ATR_PERIOD + 6, OPENING_VOLUME_DAYS), calendar).reverse();
     if (!days.length) throw new Error('No previous trading days in the holiday calendar.');
-    const missing = items.filter((i) => !cached[i.symbol]);
+    const missing = items.filter((i) => cached[i.symbol]?.v !== HISTORY_VERSION);
     let done = 0;
     const errors = [];
     const call = (args) => limiter.run(() => kite.historical({ apiKey, accessToken, ...args }));
     for (const item of missing) {
-      const out = { atr14: null, openVol5Avg: null, openVolDays: 0, prevOi: null };
+      const out = { v: HISTORY_VERSION, atr14: null, openVol5Avg: null, openValueAvg: null, openRangePctAvg: null, openVolDays: 0, prevOi: null };
       try {
         const daily = await call({ token: item.token, interval: 'day', from: `${days[0]} 00:00:00`, to: `${days.at(-1)} 23:59:59` });
         out.atr14 = atrFromDayCandles(daily, today);
         const firstOpenDay = days.at(-OPENING_VOLUME_DAYS);
         const minutes = await call({ token: item.token, interval: 'minute', from: `${firstOpenDay} 09:15:00`, to: `${days.at(-1)} 09:20:00` });
-        const ov = openingVolumeAverage(minutes, today);
-        if (ov) { out.openVol5Avg = ov.avg; out.openVolDays = ov.days; }
+        const ov = openingWindowAverages(minutes, today);
+        if (ov) { out.openVol5Avg = ov.volume; out.openValueAvg = ov.value; out.openRangePctAvg = ov.rangePct; out.openVolDays = ov.days; }
         if (item.futureToken) {
           const fut = await call({ token: item.futureToken, interval: 'day', from: `${days.at(-1)} 00:00:00`, to: `${days.at(-1)} 23:59:59`, oi: true });
           const last = fut.at(-1);

@@ -108,6 +108,8 @@ export function simulatedMorning({ date = SIMULATED_DATE, seed = 920 } = {}) {
     instruments[stockToken] = {
       kind: 'stock', symbol: sc.symbol, sector: sc.sector, sectorIndex: SECTOR_INDEX[sc.sector] ?? null,
       prevClose: sc.prev, preOpenPrice: openPrice, preOpenVolume, openVol5Avg: avgOpenVol, avgVolume: avgOpenVol * 12,
+      // Research baselines (20 sessions): value at the previous close, a 1.2% usual opening range, a 1% usual gap.
+      openValueAvg: avgOpenVol * sc.prev, openRangePctAvg: 1.2, openVolDays: 20, avgAbsGap: 1,
       atr14: sc.prev * 0.022, prevHigh: sc.prev * 1.01, prevLow: sc.prev * 0.99,
       upperCircuit: upper, lowerCircuit: tick2(sc.prev * (1 - band / 100)), status: sc.gap > 0 ? 'advance' : 'decline',
     };

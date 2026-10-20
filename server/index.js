@@ -134,7 +134,7 @@ app.get('/api/nse/context', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   // ?date=YYYY-MM-DD: context as of that trading day's morning (the loaded pre-open's day).
   const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : null;
-  try { res.json(await marketContext.get({ force: req.query.refresh === '1', date })); }
+  try { res.json(await withPreopenBaseline(await marketContext.get({ force: req.query.refresh === '1', date }))); }
   catch (error) { res.status(502).json({ error: error.message }); }
 });
 // Warm the cache before the 09:10 pre-open fetch on weekdays.
@@ -175,6 +175,11 @@ const recorder = createRecorder({
     ...await marketContext.get().then((c) => ({ events: c.events, market: c.market })).catch(() => ({})),
   }),
 });
+/** Add the recorded pre-open baseline (research columns) to a market context. */
+async function withPreopenBaseline(context) {
+  if (!context?.date) return context;
+  return { ...context, preopen: await recorder.preopenBaseline(context.date).catch(() => null) };
+}
 // Record the saved snapshot too, in case it was fetched before the recorder existed.
 recorder.record(preopen.status().snapshot)
   .then((r) => r.recorded && console.log(`Recorded pre-open for ${r.date}`))
@@ -205,7 +210,7 @@ const autoExport = createAutoExport({
     snapshot: preopen.status().snapshot,
     masterRows: currentMasterRows(),
     secList: await priceBands.get().catch(() => null),
-    context: await marketContext.get().catch(() => null),
+    context: await marketContext.get().then(withPreopenBaseline).catch(() => null),
   }),
 });
 const runAutoExport = () => autoExport.run()
@@ -298,7 +303,7 @@ const openingCollector = createOpeningCollector({
   getCandidates: async () => {
     const snapshot = preopen.status().snapshot;
     if (!snapshot) return null;
-    const context = await marketContext.get().catch(() => null);
+    const context = await marketContext.get().then(withPreopenBaseline).catch(() => null);
     const { stocks } = analyze(snapshot.rows, currentMasterRows(), await priceBands.get().catch(() => null), {
       convictionFactors: readJsonFile('export-settings.json')?.factorSettings ?? null, context,
     });

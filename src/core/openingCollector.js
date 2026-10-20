@@ -38,6 +38,7 @@ export function scannerRow(f, candidate = {}) {
     convictionScore: candidate.convictionScore ?? null,
     gapPct: f.gapPct ?? null, ret5Pct: f.ret5Pct ?? null, ltp: f.ltp ?? null,
     windowVolume: f.windowVolume ?? null, rvol: f.rvol ?? null,
+    rvalue: f.research?.rvalue ?? null, rangeX: f.research?.rangeX ?? null, gapX: f.research?.gapX ?? null, baselineDays: f.research?.baselineDays ?? null,
     vwapDistPct: f.vwapDistPct ?? null, closePos: f.closePos ?? null,
     imbalance5: f.depth?.imbalance5 ?? null, spreadBps: f.depth?.spreadBps ?? null,
     oiChangePct: f.fo?.oiChangePct ?? null, oiBuild: f.fo?.build ?? null, fnoMissing: f.fo?.missing ?? null,
@@ -124,7 +125,7 @@ export function createOpeningCollector({
         meta[e.token] = {
           kind: 'stock', symbol: s.symbol, sector: s.sector, sectorIndex, status: s.status,
           prevClose: s.prevClose, preOpenPrice: s.finalPrice, preOpenVolume: s.finalVolume ?? null,
-          avgVolume: s.avgVolume ?? null, prevHigh: s.prevHigh ?? null, prevLow: s.prevLow ?? null,
+          avgVolume: s.avgVolume ?? null, prevHigh: s.prevHigh ?? null, prevLow: s.prevLow ?? null, avgAbsGap: s.avgAbsGap ?? null,
           upperCircuit: s.upperCircuit ?? null, lowerCircuit: s.lowerCircuit ?? null, tick: e.tick, lot: e.lot, fno: s.band === 'none',
           // 09:10 tradeability flags (T2T, circuit, surveillance, data) and conviction, for the 09:20 decision.
           flags: (s.flags ?? []).map((f) => ({ key: f.key, label: f.label, severity: f.severity, detail: f.detail })), convictionScore: s.convictionScore ?? null,
@@ -173,6 +174,9 @@ export function createOpeningCollector({
         if (!hx) continue;
         m.atr14 = hx.atr14;
         m.openVol5Avg = hx.openVol5Avg;
+        m.openValueAvg = hx.openValueAvg ?? null;
+        m.openRangePctAvg = hx.openRangePctAvg ?? null;
+        m.openVolDays = hx.openVolDays ?? 0;
         const fut = universe.futures.find((f) => f.underlying === s.symbol);
         if (fut && hx.prevOi != null) meta[fut.token].prevOi = hx.prevOi;
       }

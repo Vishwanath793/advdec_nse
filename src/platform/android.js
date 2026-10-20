@@ -109,7 +109,8 @@ export function createAndroidApi() {
   const priceBands = createPriceBandService({ store, fetchImpl });
   // NSE cookies are kept by the phone's native HTTP layer.
   const nseLive = createNseLiveService({ fetchImpl });
-  const context = createMarketContextService({ store, fetchImpl, calendar });
+  // No F&O backfill on the phone (about 24 MB once): the OI research history builds up day by day.
+  const context = createMarketContextService({ store, fetchImpl, calendar, foBackfill: false });
   const recorder = createRecorder({
     store,
     calendar,
@@ -164,7 +165,12 @@ export function createAndroidApi() {
       saveSchedule: (config) => preopen.update(config),
     },
     priceBands: { get: () => priceBands.get() },
-    context: { get: (date = null) => context.get({ date }) },
+    context: {
+      async get(date = null) {
+        const c = await context.get({ date });
+        return { ...c, preopen: await recorder.preopenBaseline(c.date).catch(() => null) };
+      },
+    },
     live: { quote: (instruments) => nseLive.quote(instruments) },
     // The WebSocket collector runs in the PC backend; the phone keeps /quote polling (milestone 1).
     opening: null,

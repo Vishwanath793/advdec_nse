@@ -1,5 +1,6 @@
 import { strFromU8, unzipSync } from 'fflate';
 import { indiaDate, previousTradingDays } from './calendar.js';
+import { flowHistoryStats } from '../utils/research.js';
 
 export { previousTradingDays };
 
@@ -56,12 +57,17 @@ export function parseBhavcopy(text) {
 }
 
 const average = (values) => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : null);
+/** Delivered shares = traded quantity × delivery % (NSE's DELIV_QTY, to the rounding of DELIV_PER). */
+const deliveredQty = (row) => (row && Number.isFinite(row.volume) && Number.isFinite(row.delivery) ? (row.volume * row.delivery) / 100 : null);
 
 /**
  * Per-symbol stats from daily files ordered oldest -> newest: previous
  * session's high/low/close and delivery %, the closes 1, 5 and 20 sessions
  * before it, average volume over the last HISTORY_DAYS, and average delivery %
  * over the sessions before the last (so "usual" excludes the day being judged).
+ * Research (see utils/research.js): yesterday's delivered quantity and its
+ * average over the HISTORY_DAYS sessions before, and the average absolute
+ * opening gap (open vs the previous close) over the last HISTORY_DAYS sessions.
  */
 export function historyStats(days) {
   const latest = days.at(-1);
@@ -71,6 +77,13 @@ export function historyStats(days) {
   for (const [sym, last] of Object.entries(latest.rows)) {
     const vols = days.slice(-HISTORY_DAYS).map((d) => d.rows[sym]?.volume).filter(Number.isFinite);
     const delivs = days.slice(-HISTORY_DAYS - 1, -1).map((d) => d.rows[sym]?.delivery).filter(Number.isFinite);
+    const delivQtys = days.slice(-HISTORY_DAYS - 1, -1).map((d) => deliveredQty(d.rows[sym])).filter((q) => q != null);
+    const gaps = [];
+    for (let i = Math.max(1, days.length - HISTORY_DAYS); i < days.length; i++) {
+      const open = days[i].rows[sym]?.open;
+      const prev = days[i - 1].rows[sym]?.close;
+      if (open > 0 && prev > 0) gaps.push(Math.abs(open / prev - 1) * 100);
+    }
     stats[sym] = {
       prevHigh: last.high,
       prevLow: last.low,
@@ -82,9 +95,63 @@ export function historyStats(days) {
       close1: closeAgo(sym, 1), // the session before yesterday
       close5: closeAgo(sym, 5),
       close20: closeAgo(sym, 20),
+      prevDelivQty: deliveredQty(last),
+      avgDelivQty: average(delivQtys),
+      delivQtyDays: delivQtys.length,
+      avgAbsGap: average(gaps),
+      gapDays: gaps.length,
     };
   }
   return stats;
+}
+
+// ---- Index closes (Nifty 50, India VIX), from NSE's daily index file ----
+
+const INDEX_URL = (ddmmyyyy) => `https://nsearchives.nseindia.com/content/indices/ind_close_all_${ddmmyyyy}.csv`;
+
+/** Parse ind_close_all_DDMMYYYY.csv into { 'NIFTY 50': [open, high, low, close], ... } (names upper-cased). */
+export function parseIndexCloses(text) {
+  const [header, ...lines] = text.replace(/^﻿/, '').trim().split(/\r?\n/);
+  const keys = header.split(',').map((k) => k.trim());
+  const idx = { name: keys.indexOf('Index Name'), open: keys.indexOf('Open Index Value'), high: keys.indexOf('High Index Value'), low: keys.indexOf('Low Index Value'), close: keys.indexOf('Closing Index Value') };
+  if (idx.name < 0 || idx.close < 0) throw new Error('Unexpected index file format.');
+  const num = (v) => (v == null || v.trim() === '' || v.trim() === '-' ? null : Number(v));
+  const out = {};
+  for (const line of lines) {
+    const v = line.split(',');
+    const name = v[idx.name]?.trim().toUpperCase();
+    const close = num(v[idx.close]);
+    if (name && Number.isFinite(close)) out[name] = [num(v[idx.open]), num(v[idx.high]), num(v[idx.low]), close];
+  }
+  return out;
+}
+
+/**
+ * Market research from index closes (`days` oldest -> newest, each { date, rows }):
+ *  - nifty: the last close and its 20-session return (to compare stocks with);
+ *  - vix: the last India VIX close ÷ the average of the HISTORY_DAYS closes
+ *    before it, and its percentile among them.
+ */
+export function indexHistoryStats(days) {
+  const close = (d, name) => d?.rows?.[name]?.[3] ?? null;
+  const last = days.at(-1);
+  if (!last) return null;
+  const nifty = close(last, 'NIFTY 50');
+  const nifty20 = days.length > HISTORY_DAYS ? close(days.at(-1 - HISTORY_DAYS), 'NIFTY 50') : null;
+  const vix = close(last, 'INDIA VIX');
+  const before = days.slice(-HISTORY_DAYS - 1, -1).map((d) => close(d, 'INDIA VIX')).filter((v) => v != null);
+  const avg = average(before);
+  return {
+    asOf: last.date,
+    nifty: nifty == null ? null : { close: nifty, ret20: nifty20 ? (nifty / nifty20 - 1) * 100 : null },
+    vix: vix == null ? null : {
+      last: vix,
+      avg,
+      x: avg ? vix / avg : null,
+      percentile: before.length ? (before.filter((v) => v < vix).length + before.filter((v) => v === vix).length / 2) / before.length : null,
+      days: before.length,
+    },
+  };
 }
 
 const RESULTS = (a) => /financial result/i.test(a.desc ?? '')
@@ -205,7 +272,8 @@ export function mergeMarket(saved, { gift, vix, flows }, fetchedAt) {
  * (a later same-day reading only when no morning one was caught).
  */
 export function marketSignalsFor(saved, today, calendar) {
-  const [prev] = previousTradingDays(today, 1, calendar);
+  const sessions = previousTradingDays(today, HISTORY_DAYS + 1, calendar).reverse();
+  const prev = sessions.at(-1);
   // A later reading only counts once the session is open (not the early-hours night session).
   const later = saved?.gift && indiaDate(new Date(saved.gift.at)) === today && istTime(new Date(saved.gift.at)) > GIFT_MORNING_END;
   const morning = saved?.giftMornings?.[today];
@@ -216,6 +284,8 @@ export function marketSignalsFor(saved, today, calendar) {
     gift,
     vix: prev && saved?.vix?.[prev] ? { date: prev, ...saved.vix[prev] } : null,
     flows: prev && saved?.flows?.[prev] ? { date: prev, ...saved.flows[prev] } : null,
+    // Research: the previous session's flows against the 20 before (only days the app stored).
+    flowHistory: prev ? flowHistoryStats(saved?.flows ?? {}, sessions) : null,
   };
 }
 
@@ -280,11 +350,38 @@ export function foStats(rows) {
   return out;
 }
 
-/** Add the previous session's F&O stats to the per-symbol history stats. */
-function withFo(stats, fo) {
+/**
+ * How unusual each stock's last OI change is: its absolute % change as a
+ * percentile (0..1) of the absolute changes in the HISTORY_DAYS files before
+ * (`days` oldest -> newest, each the unpacked F&O rows or null when missing).
+ * OI is summed over all expiries, so a roll-over between contracts cancels out.
+ */
+export function foHistoryStats(days) {
+  const pct = (r) => {
+    const before = r ? r.oi - r.oiChange : 0;
+    return before > 0 ? Math.abs(r.oiChange / before) * 100 : null;
+  };
+  const last = days.at(-1);
+  if (!last) return {};
+  const out = {};
+  for (const [sym, r] of Object.entries(last)) {
+    const now = pct(r);
+    const hist = days.slice(-HISTORY_DAYS - 1, -1).map((d) => pct(d?.[sym])).filter((v) => v != null);
+    out[sym] = {
+      foOiRank: now != null && hist.length >= 5 ? (hist.filter((v) => v < now).length + hist.filter((v) => v === now).length / 2) / hist.length : null,
+      foOiAvgAbsPct: average(hist),
+      foOiDays: hist.length,
+    };
+  }
+  return out;
+}
+
+/** Add the previous session's F&O stats (and how unusual its OI change was) to the per-symbol history stats. */
+function withFo(stats, fo, foDays = null) {
   if (!fo) return stats;
   const merged = { ...stats };
   for (const [sym, f] of Object.entries(foStats(fo))) merged[sym] = { ...(merged[sym] ?? {}), ...f };
+  if (foDays) for (const [sym, f] of Object.entries(foHistoryStats(foDays))) merged[sym] = { ...(merged[sym] ?? {}), ...f };
   return merged;
 }
 
@@ -299,12 +396,18 @@ export const MARKET_RETRY_MS = 60 * 1000;
  * the pre-open belongs to: "yesterday" is the session before that date, never
  * a later one. Viewing Friday's pre-open on Saturday must not use Friday's close.
  */
-export function createMarketContextService({ store, fetchImpl = fetch, now = () => new Date(), calendar }) {
+/**
+ * `foBackfill`: download the F&O file of each of the last HISTORY_DAYS sessions
+ * (about 1.2 MB each, once) for the OI research column; when false only the
+ * previous session's is downloaded and the history builds up day by day.
+ */
+export function createMarketContextService({ store, fetchImpl = fetch, now = () => new Date(), calendar, foBackfill = true }) {
   let events;
   const pastEvents = new Map(); // date -> events, for dates before today (not stored)
   const unavailable = new Set(); // files that returned 404 this session
   const upgraded = new Set(); // older files already re-downloaded this session
   const foUnavailable = new Set(); // F&O files that returned 404 this session
+  const indexUnavailable = new Set(); // index files that returned 404 this session
   let market;
   let marketAttempt = 0; // last market-signal fetch (ms), successful or not
   const histories = new Map(); // date -> history (a few recent dates)
@@ -374,15 +477,32 @@ export function createMarketContextService({ store, fetchImpl = fetch, now = () 
     return packed ? unpackDay(packed) : null;
   }
 
+  /** The daily index file for `iso` (Nifty 50, India VIX and the other NSE indices), cached. */
+  async function indexDay(iso, { cachedOnly = false } = {}) {
+    const name = `indices/${iso}.json`;
+    let rows = await store.read(name);
+    if (!rows && !cachedOnly && !indexUnavailable.has(iso)) {
+      const text = await fetchText(INDEX_URL(isoToCompact(iso)));
+      if (!text) {
+        if (iso !== indiaDate(now())) indexUnavailable.add(iso);
+      } else {
+        rows = parseIndexCloses(text);
+        await store.write(name, rows);
+      }
+    }
+    return rows ?? null;
+  }
+
   /** Yesterday's range and average volume as of the morning of `iso`, from stored files only. */
   async function statsBefore(iso) {
     const days = [];
+    const foDays = [];
     for (const d of previousTradingDays(iso, HISTORY_DAYS + 1, calendar).reverse()) {
       const rows = await day(d, { cachedOnly: true });
       if (rows) days.push({ date: d, rows });
+      foDays.push(await foDay(d, { cachedOnly: true }));
     }
-    const [prev] = previousTradingDays(iso, 1, calendar);
-    return withFo(historyStats(days), prev ? await foDay(prev, { cachedOnly: true }) : null);
+    return withFo(historyStats(days), foDays.at(-1), foDays);
   }
 
   /** Yesterday's range, volume, delivery and trend as of the morning of `date` (default today). */
@@ -390,23 +510,33 @@ export function createMarketContextService({ store, fetchImpl = fetch, now = () 
     const wanted = previousTradingDays(date, HISTORY_DAYS + 1, calendar).reverse();
     const errors = [];
     const days = [];
+    const indexDays = [];
     for (const iso of wanted) {
       try {
         const rows = await day(iso);
         if (rows) days.push({ date: iso, rows });
       } catch (error) { errors.push(`${iso}: ${error.message}`); }
+      try {
+        const rows = await indexDay(iso);
+        if (rows) indexDays.push({ date: iso, rows });
+      } catch (error) { errors.push(`Indices ${iso}: ${error.message}`); }
     }
-    // The previous session's F&O open interest (F&O stocks only).
-    let fo = null;
+    // The previous session's F&O open interest (F&O stocks only), and the sessions
+    // before it for how unusual its change is (downloaded once when backfilling).
     const prev = wanted.at(-1);
-    if (prev) {
-      try { fo = await foDay(prev); } catch (error) { errors.push(`F&O ${prev}: ${error.message}`); }
+    const foDays = [];
+    for (const iso of wanted) {
+      try { foDays.push(await foDay(iso, { cachedOnly: iso !== prev && !foBackfill })); }
+      catch (error) { foDays.push(null); errors.push(`F&O ${iso}: ${error.message}`); }
     }
+    const fo = foDays.at(-1) ?? null;
     const history = {
       asOf: days.at(-1)?.date ?? null,
       days: days.length,
       foAsOf: fo ? prev : null,
-      stats: withFo(historyStats(days), fo),
+      foDays: foDays.filter(Boolean).length,
+      stats: withFo(historyStats(days), fo, foDays),
+      indices: indexHistoryStats(indexDays),
       error: errors.length ? `Some end-of-day files could not be downloaded (${errors.length}).` : null,
     };
     histories.set(date, history);
@@ -512,5 +642,5 @@ export function createMarketContextService({ store, fetchImpl = fetch, now = () 
     return job;
   }
 
-  return { get, refreshHistory, refreshEvents, refreshMarket, day, foDay, statsBefore };
+  return { get, refreshHistory, refreshEvents, refreshMarket, day, foDay, indexDay, statsBefore };
 }

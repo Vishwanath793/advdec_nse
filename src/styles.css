@@ -548,6 +548,13 @@ body {
 .market-signal { padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 0.85rem; cursor: help; }
 .market-signal.on { border-color: var(--accent); }
 .market-signal-label { color: var(--muted); }
+/* "vs 20 sessions" research columns and panel (display only) */
+.research-col { background: rgba(79, 124, 255, 0.06); }
+.research-cell { cursor: help; white-space: nowrap; }
+.research-cell.unusual { color: var(--amber); font-weight: 600; }
+.market-research { margin: 10px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 0.85rem; }
+.market-research summary { cursor: pointer; }
+.market-research-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px 24px; margin-top: 8px; }
 
 /* Stocks table download */
 .export-actions { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; }

@@ -260,12 +260,16 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
 
     const sector = m.sectorIndex ? indexMove(m.sectorIndex) : null;
     const ret5 = pct(ltp, open);
+    const gapPct = pct(open, prevClose);
+    const orRangePct = pct(orHigh, orLow) != null && open ? (range / open) * 100 : null;
+    // Window value: each minute's volume × its typical price (sampled candles, so approximate).
+    const windowValue = s.minutes.reduce((sum, c, i) => sum + (c ? s.minuteVolume[i] * ((c.h + c.l + c.c) / 3) : 0), 0);
     return {
       symbol: m.symbol, token, kind: 'stock', sector: m.sector ?? null, status: m.status ?? null,
       tick: m.tick ?? null, lot: m.lot ?? 1, fno: Boolean(m.fno), flags: m.flags ?? [], convictionScore: m.convictionScore ?? null,
       prevClose, preOpenPrice: m.preOpenPrice ?? null, open, ltp,
-      gapPct: pct(open, prevClose), ret5Pct: ret5,
-      orHigh, orLow, orRangePct: pct(orHigh, orLow) != null && open ? (range / open) * 100 : null,
+      gapPct, ret5Pct: ret5,
+      orHigh, orLow, orRangePct,
       closePos: range > 0 ? (ltp - orLow) / range : null,
       candles: s.minutes.map((c, i) => (c ? { minute: i, o: c.o, h: c.h, l: c.l, c: c.c, volume: s.minuteVolume[i], approximate: true } : null)),
       candle5: { o: open, h: orHigh, l: orLow, c: ltp, volume: s.windowVolume },
@@ -278,6 +282,18 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
       rvol: m.openVol5Avg ? s.windowVolume / m.openVol5Avg : null,
       volAccel: firstRate > 0 ? lastRate / firstRate : null,
       avgVolume20: m.avgVolume ?? null,
+      // Research (not scored): the same window in up to 20 earlier sessions (Kite 1-minute candles),
+      // and the gap against the stock's average absolute gap (NSE end-of-day files).
+      research: {
+        baselineDays: m.openVolDays ?? null,
+        windowValue,
+        avgValue: m.openValueAvg ?? null,
+        rvalue: m.openValueAvg ? windowValue / m.openValueAvg : null,
+        avgRangePct: m.openRangePctAvg ?? null,
+        rangeX: m.openRangePctAvg && orRangePct != null ? orRangePct / m.openRangePctAvg : null,
+        avgAbsGap: m.avgAbsGap ?? null,
+        gapX: m.avgAbsGap && gapPct != null ? Math.abs(gapPct) / m.avgAbsGap : null,
+      },
       vwap, vwapSource: vwap ? 'Kite average traded price (day VWAP, incl. pre-open trade)' : null,
       vwapDistPct: pct(ltp, vwap), vwapCrosses: crosses,
       vwapReclaim: s.vwapSides.length > 1 ? s.vwapSides.slice(0, -1).some((x) => x < 0) && s.vwapSides.at(-1) > 0 : null,

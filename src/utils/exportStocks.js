@@ -126,6 +126,19 @@ function signalsText(s) {
   return out.join(', ');
 }
 
+/** Research columns (utils/research.js): each ratio with the sessions behind it. */
+const RESEARCH_HEADERS = [
+  'Pre-open RVOL × 20d', 'Pre-open days', 'Pre-open value × 20d', 'Gap × 20d', 'Gap days', 'Delivery qty × 20d', 'Delivery days',
+  'RS vs sector (20 sessions, pts)', 'RS vs Nifty (20 sessions, pts)', 'OI change rank (0–100)', 'OI days',
+];
+function researchCells(s) {
+  const d = s.researchDays ?? {};
+  return [
+    round(s.preRvolX), d.preopen ?? null, round(s.preValueX), round(s.gapX), d.gap ?? null, round(s.delivQtyX), d.deliv ?? null,
+    round(s.rsSectorPct), round(s.rsNiftyPct), s.oiRank == null ? null : Math.round(s.oiRank * 100), d.oi ?? null,
+  ];
+}
+
 /**
  * The workbook for `stocks` (analysis output, in table order) scored with
  * `factorSettings`. `meta`: { exportedAt: Date, source: string, filters?: string }.
@@ -139,6 +152,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
     'Symbol', 'Company', 'Sector', 'Market cap (₹ Cr)', 'Prev close', 'Final price', 'Change', '% change', 'Status',
     'Pre-open value (₹ Cr)', 'Conviction', 'Direction', 'Score before cap', 'Capped by', 'Flags', 'Signals',
     'Lower circuit', 'Upper circuit', 'Band',
+    ...RESEARCH_HEADERS,
     ...CONVICTION_FACTORS.flatMap((f) => [`${f.label} score`, `${f.label} weight`]),
     'Factors without data',
   ];
@@ -157,6 +171,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
       signalsText(s),
       s.lowerCircuit, s.upperCircuit,
       typeof s.band === 'number' ? `${s.band}%` : s.band === 'none' ? 'F&O (no fixed band)' : null,
+      ...researchCells(s),
       ...CONVICTION_FACTORS.flatMap((f) => {
         const u = used.get(f.key);
         return u ? [Math.round(u.value * 100), round(u.weight)] : [null, null];
@@ -191,6 +206,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
     [`Buy/sell orders count at ${FNO_ORDERS_SHARE * 100}% of their weight for F&O stocks (see the weight column per stock).`],
     [`Gaps under ${MIN_GAP_PCT}% and rows with inconsistent NSE data are not scored.`],
     [`T2T and circuit-locked stocks are capped at ${BLOCKED_SCORE_CAP} ("Score before cap" shows the uncapped score).`],
+    ['Research columns (× 20d, RS, OI rank) compare each stock with its own previous 20 completed sessions; "days" is how many had data. They are not in the conviction score.'],
   ];
 
   return buildXlsx([
@@ -198,6 +214,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
       name: 'Stocks',
       rows: [header, ...rows],
       widths: [14, 30, 24, 14, 11, 11, 9, 9, 11, 13, 11, 10, 11, 14, 18, 26, 12, 12, 16,
+        ...RESEARCH_HEADERS.map(() => 13),
         ...CONVICTION_FACTORS.flatMap(() => [12, 11]), 30],
     },
     { name: 'Conviction factors', rows: settingsRows, widths: [30, 12, 11, 14, 100], filter: false },

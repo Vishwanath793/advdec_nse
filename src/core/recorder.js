@@ -1,6 +1,7 @@
 import { indiaDate, istInstant, marketDay } from './calendar.js';
 import { BHAV_READY_TIME, parseNseDate } from './marketContext.js';
 import { buildReportCard, dayTrades } from '../utils/reportCard.js';
+import { preopenBaseline as buildPreopenBaseline, preopenDaySummary, RESEARCH_DAYS } from '../utils/research.js';
 
 /**
  * Daily recorder. NSE only serves today's pre-open, so each trading day's
@@ -74,6 +75,7 @@ export function createRecorder({ store, calendar, context, inputs, now = () => n
   const cache = new Map(); // date -> { marketUpdatedAt, rows, masterRows, secList, events }
   const masters = new Map();
   const outcomes = new Map(); // date -> end-of-day rows (only once available)
+  const preopenSummaries = new Map(); // date -> compact pre-open summary (research baseline)
   let writing = Promise.resolve();
 
   const readIndex = async () => (await store.read(INDEX)) ?? { days: [] };
@@ -168,6 +170,25 @@ export function createRecorder({ store, calendar, context, inputs, now = () => n
   }
   const confirmation = (date) => store.read(confirmFile(date));
 
+  /**
+   * Pre-open baseline for the morning of `date`: average matched quantity and
+   * value per stock and average advancing % per sector over up to RESEARCH_DAYS
+   * recorded days before it (see utils/research.js). Coverage grows as days are recorded.
+   */
+  async function preopenBaseline(date) {
+    const { days } = await readIndex();
+    const summaries = [];
+    for (const { date: d } of days.filter((x) => x.date < date).slice(-RESEARCH_DAYS)) {
+      if (!preopenSummaries.has(d)) {
+        const day = await loadDay(d);
+        if (!day) continue;
+        preopenSummaries.set(d, { date: d, ...preopenDaySummary(day.rows, day.masterRows) });
+      }
+      summaries.push(preopenSummaries.get(d));
+    }
+    return buildPreopenBaseline(summaries);
+  }
+
   async function status() {
     const { days } = await readIndex();
     return { days: days.length, first: days[0]?.date ?? null, latest: days.at(-1)?.date ?? null };
@@ -203,5 +224,5 @@ export function createRecorder({ store, calendar, context, inputs, now = () => n
     return { recorded: days.length, first: days[0]?.date ?? null, latest: days.at(-1)?.date ?? null, pending, skipped, ...buildReportCard(scored) };
   }
 
-  return { record, status, report, saveConfirmation, confirmation };
+  return { record, status, report, saveConfirmation, confirmation, preopenBaseline };
 }

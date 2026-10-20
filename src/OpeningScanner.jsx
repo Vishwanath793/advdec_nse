@@ -141,7 +141,10 @@ export default function OpeningScanner() {
                 <th className="num" title="Official open vs previous close">Gap %</th>
                 <th className="num" title="Last price vs the official open">5-min %</th>
                 <th className="num" title="Volume since 09:15 (pre-open auction excluded)">Open vol</th>
-                <th className="num" title="Opening volume ÷ average 09:15–09:20 volume of recent sessions">RVOL</th>
+                <th className="num" title="Opening volume ÷ average 09:15–09:20 volume of the last 20 sessions (Kite 1-minute candles)">RVOL</th>
+                <th className="num research-col" title="Research: 09:15–09:20 traded value ÷ its 20-session average for the same window">Value ×</th>
+                <th className="num research-col" title="Research: first-five-minute high–low range % ÷ its 20-session average">Range ×</th>
+                <th className="num research-col" title="Research: |gap from the official open| ÷ the stock's average absolute gap over 20 sessions">Gap ×</th>
                 <th className="num" title="Last price vs Kite's average traded price (day VWAP)">VWAP %</th>
                 <th className="num" title="Top-5 order-book imbalance: pending orders, not trades">Imbal.</th>
                 <th className="num" title="Bid-ask spread, basis points">Spread</th>
@@ -163,7 +166,10 @@ export default function OpeningScanner() {
                   <td className={`num ${tone(r.gapPct)}`}>{sgn(r.gapPct)}</td>
                   <td className={`num ${tone(r.ret5Pct)}`}>{sgn(r.ret5Pct)}</td>
                   <td className="num">{vol(r.windowVolume)}</td>
-                  <td className="num">{f2(r.rvol)}</td>
+                  <td className="num" title={r.baselineDays != null ? `${r.baselineDays}/20 sessions in the baseline` : ''}>{f2(r.rvol)}</td>
+                  <td className="num">{f2(r.rvalue)}</td>
+                  <td className="num">{f2(r.rangeX)}</td>
+                  <td className="num">{f2(r.gapX)}</td>
                   <td className={`num ${tone(r.vwapDistPct)}`}>{sgn(r.vwapDistPct)}</td>
                   <td className={`num ${tone(r.imbalance5)}`}>{sgn(r.imbalance5)}</td>
                   <td className="num">{f2(r.spreadBps, 1)}</td>
@@ -279,6 +285,14 @@ function OpeningDetail({ d, decision, onClose }) {
             wicks {f2(d.upperWickPct, 0)}% / {f2(d.lowerWickPct, 0)}% · ATR(14) {f2(d.atr14)} ({f2(d.orRangeAtr)}× range) ·
             VWAP {f2(d.vwap)} ({d.vwapSource ?? 'n/a'}) · prev high/low {sgn(d.distPrevHighPct)}% / {sgn(d.distPrevLowPct)}%
           </p>
+          {d.research && (
+            <p className="hint">
+              <strong>Vs the last 20 sessions</strong> (research, not scored; {d.research.baselineDays ?? 0}/20 sessions of Kite 1-minute candles):
+              volume {f2(d.rvol)}× · value ₹{vol(Math.round(d.research.windowValue))} vs ₹{vol(d.research.avgValue == null ? null : Math.round(d.research.avgValue))} ({f2(d.research.rvalue)}×) ·
+              range {f2(d.orRangePct)}% vs {f2(d.research.avgRangePct)}% ({f2(d.research.rangeX)}×) ·
+              gap {sgn(d.gapPct)}% vs an average {f2(d.research.avgAbsGap)}% ({f2(d.research.gapX)}×, NSE end-of-day files). Value today uses sampled 1-minute candles, so it is approximate.
+            </p>
+          )}
         </div>
         <div>
           <strong>Order book</strong> <span className="hint">(pending orders, not trades)</span>

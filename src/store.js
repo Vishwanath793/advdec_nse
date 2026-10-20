@@ -36,6 +36,7 @@ export const DEFAULT_SETTINGS = {
   convictionFactorsVersion: FACTOR_DEFAULTS_VERSION, // which default weights convictionFactors started from
   confirmChecks: DEFAULT_CHECK_SETTINGS, // 9:15 Confirm: { key: { on, weight } } per check
   confirmBlend: DEFAULT_TRADE_BLEND * 100, // trade score: % from the 9:20 confirmation (rest: 9:08 conviction)
+  showResearch: false, // Analyzer: "vs 20 sessions" research columns (display only)
   liveSource: 'auto', // 9:15 Confirm prices: 'auto' (Kite, else NSE) | 'kite' | 'nse'
   maxResults: 50,
 };

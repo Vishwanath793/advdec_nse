@@ -3,6 +3,7 @@ import { marketCapKey, marketCapOf } from './master.js';
 import { scoreConviction } from './conviction.js';
 import { tradeFlags } from './tradeability.js';
 import { applySignals } from './signals.js';
+import { applyResearch, applySectorResearch } from './research.js';
 
 const num = (v) => {
   const n = toNumber(v);
@@ -168,9 +169,10 @@ export function analyze(pmRows, masterRows, secList = null, options = {}) {
     });
   }
   applySignals(stocks, options.context);
+  applyResearch(stocks, options.context); // research columns only: not part of any score
   for (const stock of stocks) stock.flags = tradeFlags(stock);
 
-  const sectors = [...sectorMap.values()].sort((a, b) => b.total - a.total);
+  const sectors = applySectorResearch([...sectorMap.values()].sort((a, b) => b.total - a.total), options.context);
   const total = advances + declines + unchanged;
   const adRatio = declines > 0 ? advances / declines : advances > 0 ? Infinity : null;
   const summary = { total, advances, declines, unchanged, skipped, adRatio };
