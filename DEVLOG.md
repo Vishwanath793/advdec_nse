@@ -41,6 +41,50 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-20: History layer: inference from the 20-session end-of-day history (Claude Code for vinayakb374, android-app, local commit)
+**What changed:** an optional layer **on top of** the conviction score, built only from `context.history.stats`.
+**Default scores are unchanged** (a test checks this).
+- **Five factors** (`src/utils/historyLayer.js`). Each is direction-aware and scaled to the stock's own history
+  instead of fixed % thresholds:
+  - **Gap vs its usual gap:** gap ÷ `avgAbsGap`. 1.5–3× its usual scores full marks; under 0.75× is neutral;
+    6× or more tapers, because extreme gaps tend to fade.
+  - **Delivery quantity surge:** `prevDelivQty ÷ avgDelivQty`, in the direction of yesterday's move
+    (`close1 → prevClose`). Full marks at 3×.
+  - **Yesterday's volume vs usual:** yesterday's quantity = delivered shares ÷ delivery %, divided by
+    `avgVolume`, in the direction of yesterday's move. Full marks at 2×.
+  - **Unusual OI build-up:** the build-up type scaled by `foOiRank` (full marks at the 90th percentile) instead
+    of the old fixed 10%.
+  - **20-session strength vs sector:** `close20 → prevClose` return minus the sector median. Full marks at ±10
+    points.
+- **Separate:** every scored gap gets its own **History** score (0–100, equal weights, needs 2 or more factors
+  with data). It appears in a new column next to Conviction, with the breakdown on hover. A "History score"
+  checkbox hides it.
+- **Include:** the five factors are also conviction factors, **off by default**. Turn them on one by one in
+  "Conviction factors" → *History layer*, or with **Add all to the conviction / Remove all from the conviction**.
+- **Report card:** each factor gets its own verdict automatically, and there is a new row "Top 5 by History
+  score" next to "Top 5 by conviction".
+- **Excel export:** History score and History factors columns.
+
+**Files:**
+- New: `src/utils/historyLayer.js`, `src/HistoryLayer.jsx`, `server/historyLayer.test.js` (added to `npm test`).
+- Changed: `utils/conviction.js` (adds the factors, off), `utils/analysis.js`, `utils/reportCard.js`,
+  `utils/exportStocks.js`, `App.jsx` (History column; the factor panel split into a shared `renderFactorRow`),
+  `ReportCardPage.jsx`, `styles.css`, `server/conviction.test.js` (factor lists).
+
+**Tests / checks:**
+- `npm test`: 182 pass. `npm run build` succeeds.
+- Browser, against the real 19 Oct snapshot: 230 of 750 stocks get a History score. Add all → the conviction
+  scores change; Remove all → they return exactly to the originals.
+
+**Not verified:**
+- Whether any of these factors predict outcomes. All the thresholds are hypotheses, so let the report card judge
+  them before adding them to the conviction.
+- The 09:20 decision uses the conviction with the export settings, so it is unaffected unless the factors are
+  turned on there.
+
+**Next:** after about 10 recorded days, compare "Top 5 by History score" with "Top 5 by conviction" and read
+each factor's verdict.
+
 ### 2026-10-20: "How unusual vs the last 20 sessions" research columns (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** every comparison uses the 20 completed sessions **before** the observation (never the
 observation itself) and shows its coverage ("17/20"). With fewer than 5 sessions of data a cell shows "—" and the

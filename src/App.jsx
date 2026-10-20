@@ -27,6 +27,8 @@ import ConfirmPage from './ConfirmPage.jsx';
 import OrdersPage from './OrdersPage.jsx';
 import { ModeBadge } from './TradingPanel.jsx';
 import { MarketResearch, RESEARCH_COLUMNS, ResearchCells, SectorBreadthCell } from './ResearchColumns.jsx';
+import { HISTORY_COLUMN, HistoryScore } from './HistoryLayer.jsx';
+import { HISTORY_FACTORS, HISTORY_GROUP } from './utils/historyLayer.js';
 import { formatIST } from './NseScheduleSettings.jsx';
 import { loadSettings, saveSettings, loadSession, saveSession } from './store.js';
 
@@ -706,7 +708,11 @@ export default function App() {
   };
   const activeWeights = factorWeights(settings.convictionFactors);
   const showResearch = Boolean(settings.showResearch);
-  const stockColumns = showResearch ? [...STOCK_COLUMNS, ...RESEARCH_COLUMNS] : STOCK_COLUMNS;
+  const showHistoryLayer = settings.showHistoryLayer !== false;
+  const baseColumns = showHistoryLayer
+    ? STOCK_COLUMNS.flatMap((c) => (c.key === 'convictionScore' ? [c, HISTORY_COLUMN] : [c]))
+    : STOCK_COLUMNS;
+  const stockColumns = showResearch ? [...baseColumns, ...RESEARCH_COLUMNS] : baseColumns;
   const activeShares = weightShares(activeWeights);
   const activeCount = Object.values(activeWeights).filter(Boolean).length;
   const checkedCount = CONVICTION_FACTORS.filter((f) => factorSetting(f.key).on).length;
@@ -719,6 +725,52 @@ export default function App() {
   const withWeight = (f) => ({ on: true, ...(factorSetting(f.key).weight > 0 ? {} : { weight: f.weight }) });
   const toggleFactor = (f, on) => updateFactor(f.key, on ? withWeight(f) : { on: false });
   const toggleAllFactors = (on) => updateSetting({ convictionFactors: allFactors((f) => (on ? withWeight(f) : { on: false })) });
+  // History layer: add all its factors to the conviction score, or take them all out (other factors untouched).
+  const historyOnCount = HISTORY_FACTORS.filter((f) => factorSetting(f.key).on).length;
+  const toggleHistoryFactors = (on) => updateSetting({
+    convictionFactors: allFactors((f) => (f.group !== HISTORY_GROUP ? {} : on ? withWeight(f) : { on: false })),
+  });
+  // One conviction factor's row: on/off, weight slider and box, share and help.
+  const renderFactorRow = (f) => {
+    const s = factorSetting(f.key);
+    const active = activeWeights[f.key] > 0;
+    return (
+      <div key={f.key} className={`factor-row ${active ? '' : 'off'}`}>
+        <label className="factor-toggle">
+          <input
+            type="checkbox"
+            checked={s.on}
+            onChange={(e) => toggleFactor(f, e.target.checked)}
+          />
+          <strong>{f.label}</strong>
+        </label>
+        <input
+          type="range"
+          min="0"
+          max={MAX_FACTOR_WEIGHT}
+          step="5"
+          value={s.weight}
+          disabled={!s.on}
+          aria-label={`${f.label} weight`}
+          onChange={(e) => setFactorWeight(f.key, e.target.value)}
+        />
+        <input
+          type="number"
+          className="factor-weight"
+          min="0"
+          max={MAX_FACTOR_WEIGHT}
+          value={s.weight}
+          disabled={!s.on}
+          aria-label={`${f.label} weight value`}
+          onChange={(e) => setFactorWeight(f.key, e.target.value)}
+        />
+        <span className="factor-share">
+          {active ? `${activeShares[f.key]}% share` : s.on ? 'weight 0' : 'off'}
+        </span>
+        <span className="hint factor-help">{f.help}</span>
+      </div>
+    );
+  };
   // A blank or invalid entry keeps the current weight instead of silently turning the factor off.
   const setFactorWeight = (key, value) => {
     const weight = cleanWeight(value);
@@ -1286,46 +1338,21 @@ export default function App() {
               <strong>{checkedCount === CONVICTION_FACTORS.length ? 'Uncheck all' : 'Check all'}</strong>
             </label>
             <div className="factor-grid">
-              {CONVICTION_FACTORS.map((f) => {
-                const s = factorSetting(f.key);
-                const active = activeWeights[f.key] > 0;
-                return (
-                  <div key={f.key} className={`factor-row ${active ? '' : 'off'}`}>
-                    <label className="factor-toggle">
-                      <input
-                        type="checkbox"
-                        checked={s.on}
-                        onChange={(e) => toggleFactor(f, e.target.checked)}
-                      />
-                      <strong>{f.label}</strong>
-                    </label>
-                    <input
-                      type="range"
-                      min="0"
-                      max={MAX_FACTOR_WEIGHT}
-                      step="5"
-                      value={s.weight}
-                      disabled={!s.on}
-                      aria-label={`${f.label} weight`}
-                      onChange={(e) => setFactorWeight(f.key, e.target.value)}
-                    />
-                    <input
-                      type="number"
-                      className="factor-weight"
-                      min="0"
-                      max={MAX_FACTOR_WEIGHT}
-                      value={s.weight}
-                      disabled={!s.on}
-                      aria-label={`${f.label} weight value`}
-                      onChange={(e) => setFactorWeight(f.key, e.target.value)}
-                    />
-                    <span className="factor-share">
-                      {active ? `${activeShares[f.key]}% share` : s.on ? 'weight 0' : 'off'}
-                    </span>
-                    <span className="hint factor-help">{f.help}</span>
-                  </div>
-                );
-              })}
+              {CONVICTION_FACTORS.filter((f) => f.group !== HISTORY_GROUP).map((f) => renderFactorRow(f))}
+            </div>
+            <div className="factor-group-head">
+              <strong>History layer</strong>{' '}
+              <span className="hint">
+                ({historyOnCount} of {HISTORY_FACTORS.length} in the score) · normalised by each stock&apos;s own last 20 sessions
+                (NSE end-of-day files). It always shows as its own &ldquo;History&rdquo; score; add the factors here to also
+                count them in the conviction.
+              </span>
+              <button type="button" className="btn ghost" onClick={() => toggleHistoryFactors(historyOnCount < HISTORY_FACTORS.length)}>
+                {historyOnCount < HISTORY_FACTORS.length ? 'Add all to the conviction' : 'Remove all from the conviction'}
+              </button>
+            </div>
+            <div className="factor-grid">
+              {HISTORY_FACTORS.map((h) => renderFactorRow(CONVICTION_FACTORS.find((f) => f.key === h.key)))}
             </div>
             <div className="factor-actions">
               <button
@@ -1510,6 +1537,14 @@ export default function App() {
                 />
                 Research columns (vs 20 sessions)
               </label>
+              <label className="cap-filter" title="A separate 0–100 score from each stock's own last 20 sessions (gap vs its usual, delivery and volume surges, unusual OI, strength vs its sector). Its factors join the conviction only when added in “Conviction factors”.">
+                <input
+                  type="checkbox"
+                  checked={showHistoryLayer}
+                  onChange={(e) => updateSetting({ showHistoryLayer: e.target.checked })}
+                />
+                History score
+              </label>
             </div>
             <div className="table-wrap tall">
               <table className="stock-table">
@@ -1559,6 +1594,7 @@ export default function App() {
                         {s.pctChange ?? '—'}
                       </td>
                       <td className="num">{renderConviction(s)}</td>
+                      {showHistoryLayer && <td className="num"><HistoryScore s={s} /></td>}
                       <td className="signals-cell wrap-cell">{renderSignals(s)}</td>
                       <td className="num circuit-cell">{renderCircuit(s)}</td>
                       <td>

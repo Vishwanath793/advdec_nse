@@ -1,3 +1,5 @@
+import { HISTORY_FACTORS, historyLayerFactors } from './historyLayer.js';
+
 /**
  * Gap-continuation conviction score (0–100) for each gapped stock.
  *
@@ -50,6 +52,8 @@ export const CONVICTION_FACTORS = [
   { key: 'gift', label: 'GIFT Nifty', weight: 20, defaultOn: false, marketWide: true, help: 'GIFT Nifty change before the open (read just before the pre-open closes): up supports gap-ups, down supports gap-downs. Full marks at ±1%.' },
   { key: 'vix', label: 'India VIX change', weight: 20, defaultOn: false, marketWide: true, help: "Yesterday's India VIX change: rising fear supports gap-downs, falling fear gap-ups. Full marks at ±10%." },
   { key: 'flows', label: 'FII/DII flows', weight: 20, defaultOn: false, marketWide: true, help: "Yesterday's FII net buying (DII shown for reference): buying supports gap-ups, selling gap-downs. Full marks at ±₹3,000 Cr." },
+  // History layer (utils/historyLayer.js): off by default, add one by one or all together.
+  ...HISTORY_FACTORS,
 ];
 
 /** Full-strength points for the newer factors. */
@@ -327,7 +331,7 @@ function factorScores(stock, dir, ctx) {
     out.value = { value: rank, detail: `₹${stock.valueCr.toFixed(2)} Cr traded in pre-open (higher than ${pct(rank)} of stocks)` };
   }
 
-  Object.assign(out, historyFactors(stock, dir), marketFactors(ctx.market, dir));
+  Object.assign(out, historyFactors(stock, dir), marketFactors(ctx.market, dir), historyLayerFactors(stock, dir));
   return out;
 }
 

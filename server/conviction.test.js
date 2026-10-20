@@ -134,7 +134,8 @@ test('factors can be turned off or reweighted, and all-off means no score', () =
   assert.equal(a.convictionScore, 55);
   assert.deepEqual(a.conviction.excluded, ['Sector strength', 'Market A/D agrees', '52-week breakout', 'Pre-open value',
     'Results catalyst', 'Relative volume', "Gap vs yesterday's range", 'Delivery % (yesterday)', "Yesterday's close in range",
-    'Trend (5 & 20 sessions)', 'F&O OI build-up', 'GIFT Nifty', 'India VIX change', 'FII/DII flows']);
+    'Trend (5 & 20 sessions)', 'F&O OI build-up', 'GIFT Nifty', 'India VIX change', 'FII/DII flows',
+    'Gap vs its usual gap', 'Delivery quantity surge', "Yesterday's volume vs usual", 'Unusual OI build-up', '20-session strength vs sector']);
   assert.deepEqual(a.conviction.missing, []); // turned-off factors are not reported as missing data
 
   // Settings saved before a factor existed fall back to that factor's default.
@@ -266,7 +267,8 @@ test('weight shares are whole numbers that always add up to exactly 100', () => 
   assert.deepEqual(weightShares({ a: 5, b: 0 }), { a: 100, b: 0 });
   assert.deepEqual(weightShares(factorWeights(DEFAULT_FACTOR_SETTINGS)),
     { gap: 20, sector: 20, orders: 20, market: 20, range: 0, value: 20, catalyst: 0, rvol: 0, prevRange: 0,
-      delivery: 0, closeLoc: 0, trend: 0, oi: 0, gift: 0, vix: 0, flows: 0 });
+      delivery: 0, closeLoc: 0, trend: 0, oi: 0, gift: 0, vix: 0, flows: 0,
+      hGapNorm: 0, hDelivQty: 0, hVolume: 0, hOiRank: 0, hRsSector: 0 });
   const rand = rng(7);
   for (let i = 0; i < 2000; i++) {
     const weights = Object.fromEntries(KEYS.map((k) => [k, rand() < 0.3 ? 0 : Math.round(rand() * 100)]));
@@ -329,7 +331,12 @@ test('checking every factor scores with all of them when their data is there', (
     history: { stats: { AAA: {
       prevHigh: 101, prevLow: 98, prevClose: 100, avgVolume: 1000, prevDelivery: 60, avgDelivery: 30, close1: 98, close5: 95, close20: 90,
       foOi: 1000000, foOiChangePct: 6, foPricePct: 1.2,
-    } } },
+      // History layer inputs.
+      avgAbsGap: 0.8, gapDays: 20, prevDelivQty: 600, avgDelivQty: 300, delivQtyDays: 20, foOiRank: 0.9, foOiDays: 20,
+    },
+    // Two sector peers, so the sector has a median 20-session return.
+    BBB: { prevClose: 100, close20: 100 }, CCC: { prevClose: 100, close20: 102 },
+    } },
     market: {
       gift: { at: '2026-10-16T03:37:00Z', last: 23200, pct: 0.4, morning: true },
       vix: { date: '2026-10-15', last: 14.1, pct: -3 },
@@ -339,7 +346,7 @@ test('checking every factor scores with all of them when their data is there', (
   };
   const [a] = analyze([row('AAA', 1.5, {
     'TOTAL BUY QTY': 700, 'TOTAL SELL QTY': 300, '52 WEEK HIGH': 150, '52 WEEK LOW': 60, 'FINAL VOLUME': 500,
-  })], master, null, { convictionFactors: all, context }).stocks;
+  }), row('BBB', 0.2), row('CCC', -0.2)], master, null, { convictionFactors: all, context }).stocks;
   assert.deepEqual(a.conviction.excluded, []);
   assert.deepEqual(a.conviction.missing, []);
   assert.equal(a.conviction.factors.length, CONVICTION_FACTORS.length);

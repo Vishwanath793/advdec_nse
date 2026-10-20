@@ -140,6 +140,7 @@ export default function ReportCardPage({ factorSettings }) {
                       <thead><tr><th>Each day</th>{STATS_HEAD}</tr></thead>
                       <tbody>
                         <tr><td>Top {PICKS_PER_DAY} by conviction (tradeable)</td><StatsCells s={report.picks[key].conviction} /></tr>
+                        {report.picks[key].history && <tr><td title="The separate History-layer score: each stock against its own last 20 sessions">Top {PICKS_PER_DAY} by History score (tradeable)</td><StatsCells s={report.picks[key].history} /></tr>}
                         <tr><td>Top {PICKS_PER_DAY} by gap size</td><StatsCells s={report.picks[key].gap} /></tr>
                         <tr><td>All scored gappers</td><StatsCells s={report.picks[key].all} /></tr>
                       </tbody>

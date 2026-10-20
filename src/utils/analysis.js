@@ -4,6 +4,7 @@ import { scoreConviction } from './conviction.js';
 import { tradeFlags } from './tradeability.js';
 import { applySignals } from './signals.js';
 import { applyResearch, applySectorResearch } from './research.js';
+import { applyHistoryLayer } from './historyLayer.js';
 
 const num = (v) => {
   const n = toNumber(v);
@@ -177,6 +178,7 @@ export function analyze(pmRows, masterRows, secList = null, options = {}) {
   const adRatio = declines > 0 ? advances / declines : advances > 0 ? Infinity : null;
   const summary = { total, advances, declines, unchanged, skipped, adRatio };
   scoreConviction(stocks, sectors, summary, options.convictionFactors, options.context?.market ?? null);
+  applyHistoryLayer(stocks); // the separate History score (its factors join the conviction only when turned on)
 
   return {
     summary,

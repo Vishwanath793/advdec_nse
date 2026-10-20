@@ -150,7 +150,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
 
   const header = [
     'Symbol', 'Company', 'Sector', 'Market cap (₹ Cr)', 'Prev close', 'Final price', 'Change', '% change', 'Status',
-    'Pre-open value (₹ Cr)', 'Conviction', 'Direction', 'Score before cap', 'Capped by', 'Flags', 'Signals',
+    'Pre-open value (₹ Cr)', 'Conviction', 'History score', 'History factors (0–100)', 'Direction', 'Score before cap', 'Capped by', 'Flags', 'Signals',
     'Lower circuit', 'Upper circuit', 'Band',
     ...RESEARCH_HEADERS,
     ...CONVICTION_FACTORS.flatMap((f) => [`${f.label} score`, `${f.label} weight`]),
@@ -164,6 +164,8 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
       s.status === 'advance' ? 'Advance' : s.status === 'decline' ? 'Decline' : 'Unchanged',
       round(s.valueCr, 4),
       c?.score ?? null,
+      s.historyScore ?? null,
+      (s.historyLayer?.factors ?? []).map((f) => `${f.label} ${Math.round(f.value * 100)}`).join(', ') || null,
       c ? (c.direction === 'up' ? 'Gap-up' : 'Gap-down') : null,
       c?.rawScore != null && c.rawScore !== c.score ? c.rawScore : null,
       c?.cappedBy && c.rawScore > c.score ? c.cappedBy.join(', ') : null,
@@ -206,6 +208,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
     [`Buy/sell orders count at ${FNO_ORDERS_SHARE * 100}% of their weight for F&O stocks (see the weight column per stock).`],
     [`Gaps under ${MIN_GAP_PCT}% and rows with inconsistent NSE data are not scored.`],
     [`T2T and circuit-locked stocks are capped at ${BLOCKED_SCORE_CAP} ("Score before cap" shows the uncapped score).`],
+    ['History score: a separate 0–100 score from each stock’s own last 20 sessions (equal weights over the history factors with data). Its factors count in the conviction only when turned on.'],
     ['Research columns (× 20d, RS, OI rank) compare each stock with its own previous 20 completed sessions; "days" is how many had data. They are not in the conviction score.'],
   ];
 
@@ -213,7 +216,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
     {
       name: 'Stocks',
       rows: [header, ...rows],
-      widths: [14, 30, 24, 14, 11, 11, 9, 9, 11, 13, 11, 10, 11, 14, 18, 26, 12, 12, 16,
+      widths: [14, 30, 24, 14, 11, 11, 9, 9, 11, 13, 11, 11, 40, 10, 11, 14, 18, 26, 12, 12, 16,
         ...RESEARCH_HEADERS.map(() => 13),
         ...CONVICTION_FACTORS.flatMap(() => [12, 11]), 30],
     },
