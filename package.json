@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "test": "node --test server/preopen.test.js server/priceBands.test.js server/conviction.test.js server/tradeability.test.js server/marketContext.test.js server/kite.test.js server/phonePreopen.test.js server/recorder.test.js server/export.test.js server/marketSignals.test.js server/timeline.test.js server/confirm.test.js server/orderScheduler.test.js server/orderRoutes.test.js server/nseLive.test.js server/openingWindow.test.js server/kiteData.test.js server/openingCollector.test.js server/trading.test.js server/research.test.js server/historyLayer.test.js server/auctionLayer.test.js server/tv/tv.test.js",
+    "test": "node --test server/preopen.test.js server/priceBands.test.js server/conviction.test.js server/tradeability.test.js server/marketContext.test.js server/kite.test.js server/phonePreopen.test.js server/recorder.test.js server/export.test.js server/marketSignals.test.js server/timeline.test.js server/confirm.test.js server/orderScheduler.test.js server/orderRoutes.test.js server/nseLive.test.js server/openingWindow.test.js server/kiteData.test.js server/openingCollector.test.js server/trading.test.js server/research.test.js server/historyLayer.test.js server/auctionLayer.test.js server/liveOrders.test.js server/backtest.test.js server/tv/tv.test.js",
     "dev": "vite",
     "server": "node server/index.js",
     "dev:all": "(npm run server &) && npm run dev",

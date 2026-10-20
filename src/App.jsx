@@ -1327,8 +1327,8 @@ export default function App() {
             </summary>
             <p className="hint">
               Turn factors off or change their weight. Weights are relative: the factors that are on are rescaled to
-              100, shown as “share”. Changes apply instantly and are saved in this browser. Defaults: equal weights on the five
-              factors that held up against 14–15 Oct outcomes.
+              100, shown as “share”. Changes apply instantly and are saved in this browser. Defaults: gap size 15, buy/sell
+              orders 100, pre-open value 100 and relative volume 100; the rest off.
             </p>
             <label className="factor-toggle factor-all">
               <input

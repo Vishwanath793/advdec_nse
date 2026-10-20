@@ -190,7 +190,7 @@ export default function SettingsPage({
                     checked={!!form.autoslice}
                     onChange={(e) => set('autoslice', e.target.checked)}
                   />{' '}
-                  Auto-slice above freeze qty
+                  Auto-slice above freeze qty (F&amp;O only; not sent for NSE/BSE shares, where Kite rejects it)
                 </span>
               </label>
             </>

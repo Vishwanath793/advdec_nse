@@ -108,7 +108,7 @@ test('sector strength ranks sectors by average gap and counts same-direction gap
   // Six 5-stock sectors: IT gaps up together, four are flat, one sells off.
   const sectors = { IT: [2, 1.5, 1.2, 1.1, 1], S1: [0.6, 0, 0, 0, 0], S2: [0, 0, 0, 0, 0.1], S3: [0, 0.2, 0, 0, 0], S4: [0, 0, 0.3, 0, 0], WEAK: [-2, -1.5, -1, -1, -0.6] };
   const mk = Object.entries(sectors).flatMap(([sec, gaps]) => gaps.map((g, i) => ({ sym: `${sec}${i}`, sec, g })));
-  const r = analyze(mk.map((x) => row(x.sym, x.g)), mk.map((x) => ({ Symbol: x.sym, Industry: x.sec })));
+  const r = analyze(mk.map((x) => row(x.sym, x.g)), mk.map((x) => ({ Symbol: x.sym, Industry: x.sec })), null, { convictionFactors: V1 });
   const sector = (sym) => r.stocks.find((s) => s.symbol === sym).conviction.factors.find((f) => f.key === 'sector');
   assert.equal(sector('IT0').value, 1); // strongest sector, 5 of 5 gapped 1%+
   assert.match(sector('IT0').detail, /#1 of 6 sectors .* 5 stocks gapped \+1% or more/);
@@ -140,9 +140,10 @@ test('factors can be turned off or reweighted, and all-off means no score', () =
     'Nifty futures pre-open']);
   assert.deepEqual(a.conviction.missing, []); // turned-off factors are not reported as missing data
 
-  // Settings saved before a factor existed fall back to that factor's default.
+  // Settings saved before a factor existed fall back to that factor's default: on (orders) or off (sector).
   const [b] = analyze(rows, master, null, { convictionFactors: { gap: { on: false, weight: 20 } } }).stocks;
-  assert.equal(b.conviction.factors.find((f) => f.key === 'sector').weight, DEFAULT_FACTOR_SETTINGS.sector.weight);
+  assert.equal(b.conviction.factors.find((f) => f.key === 'orders').weight, DEFAULT_FACTOR_SETTINGS.orders.weight);
+  assert.ok(!b.conviction.factors.some((f) => f.key === 'sector'));
   assert.ok(!b.conviction.factors.some((f) => f.key === 'gap'));
 
   const off = Object.fromEntries(KEYS.map((k) => [k, { on: false, weight: 20 }]));
@@ -228,13 +229,20 @@ test('a base price of 0 falls back to the previous close (ADROITIND, 15 Oct 2026
 
 // ---- Weight system ----
 
-test('default weights: active ones sum to 100 and every factor has a usable weight to turn on with', () => {
+test('default weights (version 3, the owner\'s choice): gap 15, orders 100, value 100, rvol 100 on; every factor has a usable weight to turn on with', () => {
   const w = factorWeights(DEFAULT_FACTOR_SETTINGS);
-  assert.equal(Object.values(w).reduce((a, b) => a + b, 0), 100);
+  const on = Object.fromEntries(Object.entries(w).filter(([, v]) => v > 0));
+  assert.deepEqual(on, { gap: 15, orders: 100, value: 100, rvol: 100 });
   for (const f of CONVICTION_FACTORS) {
-    assert.equal(f.weight, 20, f.key); // unit weights: "Check all" gives every factor an equal share
+    assert.ok(f.weight > 0, f.key); // turning a factor on always gives it a weight
     assert.equal(w[f.key], (f.defaultOn ?? true) ? f.weight : 0);
   }
+  assert.deepEqual(
+    Object.fromEntries(CONVICTION_FACTORS.filter((f) => f.defaultOn === false).map((f) => [f.key, f.weight])),
+    { sector: 10, market: 20, range: 20, catalyst: 20, prevRange: 20, delivery: 20, closeLoc: 20, trend: 20, oi: 100, gift: 20, vix: 30, flows: 20,
+      hGapNorm: 20, hDelivQty: 20, hVolume: 20, hOiRank: 20, hRsSector: 20,
+      aDrift: 20, aOrdersHeld: 20, aImbalance: 20, aFutures: 20, aRoom: 20, aNifty: 20 },
+  );
   assert.deepEqual(factorWeights(undefined), w);
   assert.deepEqual(factorWeights(null), w);
   assert.deepEqual(factorWeights({}), w);
@@ -257,7 +265,8 @@ test('weights: bad values fall back to the default instead of silently switching
   assert.equal(weightFor(-5), 0);
   assert.equal(weightFor(500), MAX_FACTOR_WEIGHT);
   assert.equal(weightFor(40, false), 0);
-  assert.equal(factorWeights({ sector: { on: 'false', weight: 40 } }).sector, 40); // non-boolean "on" -> default (on)
+  assert.equal(factorWeights({ gap: { on: 'false', weight: 40 } }).gap, 40); // non-boolean "on" -> default (on)
+  assert.equal(factorWeights({ sector: { on: 'false', weight: 40 } }).sector, 0); // ...and for sector the default is off
   assert.equal(factorWeights({ range: { weight: 40 } }).range, 0); // "on" missing -> default (off)
   assert.equal(cleanWeight('7'), 7);
   assert.equal(cleanWeight(''), null);
@@ -268,7 +277,7 @@ test('weight shares are whole numbers that always add up to exactly 100', () => 
   assert.deepEqual(weightShares({ a: 0, b: 0 }), { a: 0, b: 0 });
   assert.deepEqual(weightShares({ a: 5, b: 0 }), { a: 100, b: 0 });
   assert.deepEqual(weightShares(factorWeights(DEFAULT_FACTOR_SETTINGS)),
-    { gap: 20, sector: 20, orders: 20, market: 20, range: 0, value: 20, catalyst: 0, rvol: 0, prevRange: 0,
+    { gap: 5, sector: 0, orders: 32, market: 0, range: 0, value: 32, catalyst: 0, rvol: 31, prevRange: 0,
       delivery: 0, closeLoc: 0, trend: 0, oi: 0, gift: 0, vix: 0, flows: 0,
       hGapNorm: 0, hDelivQty: 0, hVolume: 0, hOiRank: 0, hRsSector: 0,
       aDrift: 0, aOrdersHeld: 0, aImbalance: 0, aFutures: 0, aRoom: 0, aNifty: 0 });
@@ -365,7 +374,12 @@ test('checking every factor scores with all of them when their data is there', (
 });
 
 test('saved settings migrate to new defaults only when they were never customised', () => {
-  assert.equal(FACTOR_DEFAULTS_VERSION, 2);
+  assert.equal(FACTOR_DEFAULTS_VERSION, 3);
+  // Untouched version-2 defaults (unit weights on five factors) move to the version-3 defaults.
+  const V2 = Object.fromEntries(KEYS.map((k) => [k, { on: ['gap', 'sector', 'orders', 'market', 'value'].includes(k), weight: 20 }]));
+  assert.equal(migrateFactorSettings(V2, 2), DEFAULT_FACTOR_SETTINGS);
+  const v2custom = { ...V2, rvol: { on: true, weight: 20 } };
+  assert.equal(migrateFactorSettings(v2custom, 2), v2custom);
   assert.equal(migrateFactorSettings(V1, undefined), DEFAULT_FACTOR_SETTINGS);
   assert.equal(migrateFactorSettings(V1, 1), DEFAULT_FACTOR_SETTINGS);
   // Saved before the last three factors existed.

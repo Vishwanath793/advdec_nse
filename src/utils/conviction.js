@@ -13,7 +13,13 @@ import { AUCTION_FACTORS, auctionLayerFactors } from './auctionLayer.js';
  */
 
 /*
- * Default weights (version 2): equal ("unit") weights on the factors that held
+ * Default weights (version 3, chosen by the owner on 19 Oct 2026): gap size 15,
+ * buy/sell orders 100, pre-open value 100 and relative volume 100 on (shares
+ * about 5/32/32/31%); everything else off, keeping the weights it was set to.
+ * This replaces the version-2 defaults described below; it was a deliberate
+ * choice, not re-derived from the report card.
+ *
+ * Version 2 (kept for reference): equal ("unit") weights on the factors that held
  * up in measured outcomes, which is the robust choice while there are only a
  * few days of data: fitted weights mostly fit that data's noise, and unit
  * weights are known to predict about as well out of sample (Dawes 1979).
@@ -29,18 +35,17 @@ import { AUCTION_FACTORS, auctionLayerFactors } from './auctionLayer.js';
  * ranked gap-ups at ρ 0.25 and gap-downs at 0.22, against 0.18/0.19 for
  * weights fitted to the single-factor correlations.
  *
- * Every factor defaults to the same weight, so "Check all" means equal weights.
- * Re-derive as more days are recorded.
+ * Re-check against the report card as more days are recorded.
  */
 export const CONVICTION_FACTORS = [
-  { key: 'gap', label: 'Gap size', weight: 20, help: 'Moderate gaps score best: full marks for 0.75–2% gap-ups and 0.75–3% gap-downs; bigger gaps taper because they tend to fade.' },
-  { key: 'sector', label: 'Sector strength', weight: 20, help: "Sector's average gap vs other sectors, plus peers gapping 1%+ the same way." },
-  { key: 'orders', label: 'Buy/sell orders', weight: 20, help: 'Share of pending pre-open orders on the gap side (counts ¼ for F&O stocks).' },
-  { key: 'market', label: 'Market A/D agrees', weight: 20, marketWide: true, help: 'Share of all stocks moving in the gap direction.' },
+  { key: 'gap', label: 'Gap size', weight: 15, help: 'Moderate gaps score best: full marks for 0.75–2% gap-ups and 0.75–3% gap-downs; bigger gaps taper because they tend to fade.' },
+  { key: 'sector', label: 'Sector strength', weight: 10, defaultOn: false, help: "Sector's average gap vs other sectors, plus peers gapping 1%+ the same way." },
+  { key: 'orders', label: 'Buy/sell orders', weight: 100, help: 'Share of pending pre-open orders on the gap side (counts ¼ for F&O stocks).' },
+  { key: 'market', label: 'Market A/D agrees', weight: 20, defaultOn: false, marketWide: true, help: 'Share of all stocks moving in the gap direction.' },
   { key: 'range', label: '52-week breakout', weight: 20, defaultOn: false, help: 'Full marks when opening through the 52-week high (or low); otherwise neutral.' },
-  { key: 'value', label: 'Pre-open value', weight: 20, help: 'Pre-open traded value compared with other stocks.' },
+  { key: 'value', label: 'Pre-open value', weight: 100, help: 'Pre-open traded value compared with other stocks.' },
   { key: 'catalyst', label: 'Results catalyst', weight: 20, defaultOn: false, help: 'Results announced since the last close score full marks; an ex-date today scores zero (the gap may be a price adjustment).' },
-  { key: 'rvol', label: 'Relative volume', weight: 20, defaultOn: false, help: 'Pre-open quantity vs its 20-day average daily volume, ranked against other stocks.' },
+  { key: 'rvol', label: 'Relative volume', weight: 100, help: 'Pre-open quantity vs its 20-day average daily volume, ranked against other stocks.' },
   { key: 'prevRange', label: "Gap vs yesterday's range", weight: 20, defaultOn: false, help: "Full marks when opening beyond yesterday's high (gap-up) or low (gap-down); otherwise neutral." },
   // Added Oct 2026, off until the report card shows they help.
   // From the end-of-day files (stock level):
@@ -48,10 +53,10 @@ export const CONVICTION_FACTORS = [
   { key: 'closeLoc', label: "Yesterday's close in range", weight: 20, defaultOn: false, help: 'Where yesterday closed between its low and high: near the high supports a gap-up, near the low a gap-down.' },
   { key: 'trend', label: 'Trend (5 & 20 sessions)', weight: 20, defaultOn: false, help: 'Return over the last 5 and 20 sessions: gaps with the trend score higher than gaps against it.' },
   // From the F&O end-of-day file (F&O stocks only):
-  { key: 'oi', label: 'F&O OI build-up', weight: 20, defaultOn: false, help: "Yesterday's stock-futures open interest: long build-up (price and OI up) supports a gap-up, short build-up (price down, OI up) a gap-down; short covering and long unwinding count half. Full marks at a 10% OI change." },
+  { key: 'oi', label: 'F&O OI build-up', weight: 100, defaultOn: false, help: "Yesterday's stock-futures open interest: long build-up (price and OI up) supports a gap-up, short build-up (price down, OI up) a gap-down; short covering and long unwinding count half. Full marks at a 10% OI change." },
   // Market-wide (same for every gap-up, mirrored for gap-downs):
   { key: 'gift', label: 'GIFT Nifty', weight: 20, defaultOn: false, marketWide: true, help: 'GIFT Nifty change before the open (read just before the pre-open closes): up supports gap-ups, down supports gap-downs. Full marks at ±1%.' },
-  { key: 'vix', label: 'India VIX change', weight: 20, defaultOn: false, marketWide: true, help: "Yesterday's India VIX change: rising fear supports gap-downs, falling fear gap-ups. Full marks at ±10%." },
+  { key: 'vix', label: 'India VIX change', weight: 30, defaultOn: false, marketWide: true, help: "Yesterday's India VIX change: rising fear supports gap-downs, falling fear gap-ups. Full marks at ±10%." },
   { key: 'flows', label: 'FII/DII flows', weight: 20, defaultOn: false, marketWide: true, help: "Yesterday's FII net buying (DII shown for reference): buying supports gap-ups, selling gap-downs. Full marks at ±₹3,000 Cr." },
   // History layer (utils/historyLayer.js): off by default, add one by one or all together.
   ...HISTORY_FACTORS,
@@ -82,12 +87,17 @@ export const DEFAULT_FACTOR_SETTINGS = Object.fromEntries(
 );
 
 /** Bump when the default weights change, so users who never customised get the new ones. */
-export const FACTOR_DEFAULTS_VERSION = 2;
+export const FACTOR_DEFAULTS_VERSION = 3;
 
 /** Earlier default sets ({ key: [on, weight] }); saved settings equal to one of these were never customised. */
 const LEGACY_DEFAULTS = [
+  // Version 1.
   { gap: [true, 20], sector: [true, 20], orders: [true, 20], market: [true, 15], range: [true, 15], value: [true, 10],
     catalyst: [false, 15], rvol: [false, 15], prevRange: [false, 15] },
+  // Version 2: unit weights on gap, sector, orders, market and value.
+  { gap: [true, 20], sector: [true, 20], orders: [true, 20], market: [true, 20], range: [false, 20], value: [true, 20],
+    catalyst: [false, 20], rvol: [false, 20], prevRange: [false, 20], delivery: [false, 20], closeLoc: [false, 20],
+    trend: [false, 20], oi: [false, 20], gift: [false, 20], vix: [false, 20], flows: [false, 20] },
 ];
 
 /**

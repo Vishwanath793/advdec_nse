@@ -491,7 +491,15 @@ export function openingFactors(f, { direction, strategy = null, plan = null, min
   add('feasibility', 'circuitRoom', 'Room to the circuit', room == null ? null : room >= MIN_CIRCUIT_ROOM_PCT ? 'pass' : 'fail', `${pctTxt(room)} to ₹${limit ?? 'n/a'}`, SRC.circuit);
   add('feasibility', 'rewardRisk', 'Reward/risk after costs', plan?.rewardRisk == null ? null : plan.rewardRisk >= minRewardRisk ? 'pass' : 'fail',
     plan ? `${numTxt(plan.rewardRisk)} (min ${minRewardRisk})` : 'no plan', SRC.plan);
-  add('feasibility', 'fresh', 'Fresh data', f.quality ? (f.quality.stale ? 'fail' : 'pass') : null, f.quality ? `last tick ${f.quality.lastTickAgeSec ?? 'n/a'} s before 09:20` : 'n/a', SRC.ws);
+  if (f.source === 'candles') {
+    add('feasibility', 'fresh', 'Complete data', f.quality ? (f.quality.stale ? 'fail' : 'pass') : null, `${f.quality?.candles ?? 0} of 5 one-minute candles`, 'Kite historical 1-minute candles');
+  } else {
+    add('feasibility', 'fresh', 'Fresh data', f.quality ? (f.quality.stale ? 'fail' : 'pass') : null, f.quality ? `last tick ${f.quality.lastTickAgeSec ?? 'n/a'} s before 09:20` : 'n/a', SRC.ws);
+  }
+  if (f.source === 'candles') {
+    const candleSource = { [SRC.ohlc]: 'Kite historical 1-minute candles 09:15–09:19', [SRC.candles]: 'Kite historical 1-minute candles', [SRC.vwap]: 'VWAP computed from 1-minute candles', [SRC.index]: 'Kite historical index candles 09:15–09:20' };
+    for (const x of out) if (candleSource[x.source]) x.source = candleSource[x.source];
+  }
   return out;
 }
 
@@ -521,9 +529,14 @@ export function scoreOpening(f, options = {}) {
 export function openingRejections(f, { direction = 0, partial = false } = {}) {
   const reasons = [];
   if (partial) reasons.push('the window was only partly collected (backend started after 09:15)');
-  if (!f.quality || f.quality.ticks < MIN_OPENING_TICKS) reasons.push(`too few ticks (${f.quality?.ticks ?? 0})`);
-  if (f.quality?.stale) reasons.push(`stale: last tick ${f.quality.lastTickAgeSec ?? '?'} s before 09:20`);
-  if (!f.depth || !(f.depth.bestBid > 0) || !(f.depth.bestAsk > 0)) reasons.push('no live two-sided order book');
+  if (f.source === 'candles') {
+    // Candle backtests: all five minutes must have traded; there is no order book to check.
+    if (!f.quality || f.quality.candles < 5) reasons.push(`only ${f.quality?.candles ?? 0} of the five 09:15–09:19 candles`);
+  } else {
+    if (!f.quality || f.quality.ticks < MIN_OPENING_TICKS) reasons.push(`too few ticks (${f.quality?.ticks ?? 0})`);
+    if (f.quality?.stale) reasons.push(`stale: last tick ${f.quality.lastTickAgeSec ?? '?'} s before 09:20`);
+    if (!f.depth || !(f.depth.bestBid > 0) || !(f.depth.bestAsk > 0)) reasons.push('no live two-sided order book');
+  }
   if (f.upperCircuit && f.ltp >= f.upperCircuit && direction >= 0) reasons.push('at the upper circuit');
   if (f.lowerCircuit && f.ltp <= f.lowerCircuit && direction <= 0) reasons.push('at the lower circuit');
   for (const flag of f.flags ?? []) if (flag.severity === 'block') reasons.push(`${flag.label}: ${flag.detail ?? 'blocked at 09:10'}`);

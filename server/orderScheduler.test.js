@@ -277,6 +277,35 @@ test('Kite rate limit (429) is retried once; other errors are never resent', asy
   assert.equal(r.o.result.error, 'Insufficient funds.');
 });
 
+test('with the real Kite client, no response from Kite fails the order once, never resends, and says to check the order book', async () => {
+  const clock = fakeTime(ist(MONDAY, '09:14:50'));
+  let calls = 0;
+  const kite = createKiteClient({ fetchImpl: async () => { calls++; throw new TypeError('fetch failed'); } });
+  const sched = scheduler(clock, (a) => kite.placeOrder(a));
+  const { order } = await sched.add({ ...base, symbol: 'NET', triggerAt: new Date(+clock.now() + 5_000).toISOString() });
+  await clock.advance(5_000 + RATE_RETRY_MS + 1_000);
+  const o = (await sched.list()).find((x) => x.id === order.id);
+  assert.deepEqual([calls, o.status, o.result.attempts], [1, 'failed', 1]);
+  assert.match(o.result.error, /no response from Kite.*check your Kite order book before placing it again/);
+});
+
+test('regression: a scheduled MARKET sell of an NSE share goes to Kite without autoslice (Kite rejects it there)', async () => {
+  // The 19 Oct failure: SELL 1 URBANCO market MIS with "Auto-slice above freeze qty" on (the default).
+  const clock = fakeTime(ist(MONDAY, '10:08:50'));
+  const sent = [];
+  const kite = createKiteClient({
+    fetchImpl: async (url, init) => { sent.push({ url, form: Object.fromEntries(new URLSearchParams(init.body)) }); return { ok: true, status: 200, json: async () => ({ data: { order_id: 'u1' } }) }; },
+  });
+  const sched = scheduler(clock, (a) => kite.placeOrder(a));
+  await sched.add({ ...base, symbol: 'URBANCO', side: 'SELL', quantity: 1, orderType: 'MARKET', product: 'MIS', autoslice: true, triggerAt: ist(MONDAY, '10:09:00').toISOString() });
+  await clock.advance(15_000);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, 'https://api.kite.trade/orders/regular');
+  assert.equal('autoslice' in sent[0].form, false);
+  assert.deepEqual([sent[0].form.exchange, sent[0].form.tradingsymbol, sent[0].form.transaction_type, sent[0].form.order_type, sent[0].form.market_protection], ['NSE', 'URBANCO', 'SELL', 'MARKET', '-1']);
+  assert.equal((await sched.list())[0].status, 'placed');
+});
+
 test('a session set after scheduling is used; cancelling while sending is refused', async () => {
   const clock = fakeTime(ist(MONDAY, '09:14:00'));
   let release;
@@ -327,7 +356,7 @@ test('the Kite request: POST /orders/regular with exactly the right form fields'
   assert.equal(calls[0].init.headers['X-Kite-Version'], '3');
   assert.deepEqual(Object.fromEntries(new URLSearchParams(calls[0].init.body)), {
     exchange: 'NSE', tradingsymbol: 'INFY', transaction_type: 'BUY', quantity: '10', product: 'MIS',
-    order_type: 'MARKET', validity: 'DAY', market_protection: '-1', autoslice: 'true', tag: 'ADVDC',
+    order_type: 'MARKET', validity: 'DAY', market_protection: '-1', tag: 'ADVDC', // no autoslice for NSE equity
   });
   const limit = validateScheduledOrder({ ...base, side: 'SELL', orderType: 'LIMIT', price: 1503.4, product: 'CNC', triggerAt: ist(MONDAY, '09:20:00').toISOString() }, now, calendar).order;
   await kite.placeOrder({ apiKey: 'key', accessToken: 'tok', order: kiteOrderFor(limit) });

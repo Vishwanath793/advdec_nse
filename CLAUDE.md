@@ -10,6 +10,15 @@ without asking the owner. When you finish, add a DEVLOG entry using its template
 what is not verified, next steps) and commit it with the work. Pull before editing DEVLOG.md; keep both sides
 of a conflict.
 
+**Shared folder on the owner's PC:** the working copy is `C:\Users\Public\advdec_nse`, used by several Windows
+accounts, each with its own Claude account. (The old `C:\Users\DELL\advdec_nse` is a backup only; don't work there.)
+- Each Windows user runs, once: `git config --global --add safe.directory C:/Users/Public/advdec_nse`. Otherwise
+  git refuses the repo ("dubious ownership") because another account created the files.
+- Pushing needs that user's own GitHub access (SSH key or HTTPS login); the remote is SSH.
+- Only one backend can run at a time (port 3001; Vite on 5173). Before starting `npm run server`, check whether
+  another Windows user's session already has it running.
+- Every logged-in user can read `.env` (OpenAI key) and `.data/` here.
+
 Owner's git identity: Vishwanath793 / vishwanath793@gmail.com. Branches `main` and `android-app` are kept
 identical (fast-forward). Pushing to `main` also builds and publishes the Android APK (GitHub Actions, release
 `android-latest`).
@@ -54,8 +63,8 @@ Run it:
 
 ## 2. The governing spec: the 09:20 opening-window trading system
 
-The full prompt the owner pasted is saved at `docs/prompt-920-trading-system.md`. That file is untracked; commit
-it if this repo is cloned elsewhere. Summary:
+The full prompt the owner pasted is saved at `docs/prompt-920-trading-system.md`. It is committed
+with the repo. Summary:
 
 Extend the app into a 09:20 Opening-Window Trading System on Zerodha Kite Connect. Keep everything that already
 happens before the open. Collect Kite WebSocket FULL-mode data from 09:15:00 to 09:19:59.999 IST, seal at
@@ -68,9 +77,9 @@ unverified, and wait for the go-ahead.**
 | # | Milestone | Status |
 |---|---|---|
 | 1 | Data collector (Kite WebSocket, seal at 09:20, recordings, scanner) | **Done**, commit 3599186 (pushed; Android CI green) |
-| 2 | 09:20 decision in PAPER (strategies, score, risk, paper broker, UI) | **Done**, commit 9274f4d (local; **not pushed yet**) |
-| 3 | Research: candle backtests, tick replay, report-card comparisons, exports | **Not started**: wait for the owner's go-ahead |
-| 4 | LIVE execution | **Not started**. Only after milestones 1–3 work, the data-quality checks pass, paper trading has run for a meaningful period, **and the owner explicitly says to start it** |
+| 2 | 09:20 decision in PAPER (strategies, score, risk, paper broker, UI) | **Done**, commit 9274f4d (pushed; Android CI green) |
+| 3 | Research: candle backtests, tick replay, report-card comparisons, exports | **Part 1 done** (pure backtest engine, tick replay, tests). **Part 2 open**: data download, routes, UI, export. See DEVLOG.md |
+| 4 | LIVE execution | **Groundwork only** (owner's go-ahead given 2026-10-18): Kite order-book/modify/cancel calls, unknown-outcome errors and pure order helpers (`src/utils/liveOrders.js`). The live broker, arming, wiring and UI are **not built**; LIVE is still unavailable. See DEVLOG.md |
 
 **Rules from the spec. They still apply.**
 - Never log, export or persist the Kite API secret or access token. The backend holds the token **in memory
@@ -340,7 +349,6 @@ Other modules:
 - Paper fills assume the visible five depth levels are available. Queue position, hidden liquidity and latency
   are not modelled.
 - The strategy thresholds and the R-multiple targets are untested hypotheses.
-- Commit 9274f4d has **not been pushed**, so its Android CI hasn't run.
 - The bundle is about 551 kB minified (177 kB gzipped). Avoid chart libraries; the chart is custom SVG.
 
 ---
@@ -377,6 +385,9 @@ Reuse what exists: `decideOpening`, `stepTick` / `rebuildLedger`, `simulatedMorn
   have broken several times. **Use the Edit/Write tools** for code containing those characters. Python is not
   installed.
 - LF→CRLF warnings on commit are normal.
+- **This PC runs Node 24; GitHub CI runs Node 22** (`.github/workflows`). A test passing locally can still fail
+  in CI. Example: a test waiting only on `AbortSignal.timeout` (an unref'd timer) passed locally but failed in CI;
+  keep a ref'd timer during such waits. CI job logs need a GitHub login; the public API shows step results.
 - Restart the backend (`preview_stop` / `preview_start` "backend") after server-side changes. `npm run server` has
   no watch mode. Restarting clears the in-memory Kite token; the app re-shares it when the page reloads.
 - After UI edits, hot reload can leave a stale error in the console (for example "ModeBadge is not defined");

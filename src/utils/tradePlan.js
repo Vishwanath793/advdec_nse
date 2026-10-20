@@ -27,7 +27,8 @@ export function buildTradePlan(signal, features, riskSettings, { availableMargin
   const reasons = [];
   const bestBid = features.depth?.bestBid ?? null;
   const bestAsk = features.depth?.bestAsk ?? null;
-  if (bestBid == null || bestAsk == null) reasons.push('no live two-sided order book');
+  // Candle backtests have no book at all: the fill simulation uses the candles instead.
+  if ((bestBid == null || bestAsk == null) && features.source !== 'candles') reasons.push('no live two-sided order book');
   const spreadBps = features.depth?.spreadBps ?? null;
   if (spreadBps != null && spreadBps > s.maxSpreadBps) reasons.push(`spread ${spreadBps.toFixed(1)} bps is above ${s.maxSpreadBps} bps`);
 

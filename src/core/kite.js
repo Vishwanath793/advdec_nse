@@ -13,12 +13,17 @@ export const QUOTE_SPACING_MS = 1100;
 export const kiteLoginUrl = (apiKey) => `https://kite.zerodha.com/connect/login?v=3&api_key=${encodeURIComponent(apiKey)}`;
 
 export class KiteError extends Error {
-  constructor(message, status, data) {
+  constructor(message, status, data, { unknown = false } = {}) {
     super(message);
     this.status = status;
     this.data = data;
+    /** True when the request may or may not have reached Kite (network error, timeout, 5xx): never resend blindly. */
+    this.unknown = unknown;
   }
 }
+
+/** Kite rejects order calls from an IP that isn't whitelisted for the app (static-IP rule). */
+export const isIpRejection = (error) => /not allowed to place orders|static ip|allowed ips/i.test(String(error?.message ?? ''));
 
 /** Hex SHA-256 (Web Crypto: available in Node 20+ and the Android WebView). */
 export async function sha256Hex(text) {
@@ -26,8 +31,15 @@ export async function sha256Hex(text) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Exchanges whose contracts have freeze quantities, where Kite's `autoslice` applies.
+ * For NSE/BSE equity Kite rejects it ("Cannot autoslice this instrument"), so it isn't sent.
+ */
+export const AUTOSLICE_EXCHANGES = ['NFO', 'BFO', 'MCX', 'CDS', 'BCD'];
+
 /** Kite's order form fields (the variety goes in the URL path). */
 export function orderForm(order) {
+  const autoslice = order.autoslice !== undefined && AUTOSLICE_EXCHANGES.includes(order.exchange);
   return new URLSearchParams({
     exchange: order.exchange,
     tradingsymbol: order.tradingsymbol,
@@ -40,7 +52,7 @@ export function orderForm(order) {
     ...(order.trigger_price !== undefined ? { trigger_price: String(order.trigger_price) } : {}),
     ...(order.disclosed_quantity !== undefined ? { disclosed_quantity: String(order.disclosed_quantity) } : {}),
     ...(order.market_protection !== undefined ? { market_protection: String(order.market_protection) } : {}),
-    ...(order.autoslice !== undefined ? { autoslice: String(!!order.autoslice) } : {}),
+    ...(autoslice ? { autoslice: String(!!order.autoslice) } : {}),
     ...(order.tag ? { tag: order.tag } : {}),
   });
 }
@@ -73,15 +85,23 @@ export function createKiteClient({ fetchImpl = fetch } = {}) {
     ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
   });
 
-  async function call(path, { method = 'GET', apiKey, accessToken, form, failure }) {
-    const response = await fetchImpl(`${KITE_API}${path}`, {
-      method,
-      headers: headersFor(apiKey, accessToken, form),
-      body: form ? form.toString() : undefined,
-      signal: AbortSignal.timeout(25_000),
-    });
+  async function call(path, { method = 'GET', apiKey, accessToken, form, failure, timeoutMs = 25_000 }) {
+    let response;
+    try {
+      response = await fetchImpl(`${KITE_API}${path}`, {
+        method,
+        headers: headersFor(apiKey, accessToken, form),
+        body: form ? form.toString() : undefined,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      // No response: the request may or may not have reached Kite.
+      throw new KiteError(redactSecrets(`${failure}: no response from Kite (${error.name === 'TimeoutError' ? 'timed out' : error.message})`, accessToken, apiKey), 0, null, { unknown: true });
+    }
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new KiteError(redactSecrets(payload.message || failure, accessToken, apiKey), response.status, payload);
+    if (!response.ok) {
+      throw new KiteError(redactSecrets(payload.message || failure, accessToken, apiKey), response.status, payload, { unknown: response.status >= 500 });
+    }
     return payload;
   }
 
@@ -148,12 +168,42 @@ export function createKiteClient({ fetchImpl = fetch } = {}) {
       });
       return (payload.data?.candles ?? []).map(([t, ...rest]) => [kiteCandleTime(t), ...rest]);
     },
-    async placeOrder({ apiKey, accessToken, order }) {
+    async placeOrder({ apiKey, accessToken, order, timeoutMs }) {
       const variety = encodeURIComponent(order.variety || 'regular');
-      const payload = await call(`/orders/${variety}`, {
-        method: 'POST', apiKey, accessToken, form: orderForm(order), failure: 'Kite order failed',
+      try {
+        const payload = await call(`/orders/${variety}`, {
+          method: 'POST', apiKey, accessToken, form: orderForm(order), failure: 'Kite order failed', timeoutMs,
+        });
+        return payload.data ?? payload;
+      } catch (error) {
+        if (error.unknown) error.message += ' The order may or may not have reached Kite: check your Kite order book before placing it again.';
+        throw error;
+      }
+    },
+    /** Modify an open/pending order: `params` from order_type, quantity, price, trigger_price, validity. */
+    async modifyOrder({ apiKey, accessToken, variety = 'regular', orderId, params, timeoutMs }) {
+      const form = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])));
+      const payload = await call(`/orders/${encodeURIComponent(variety)}/${encodeURIComponent(orderId)}`, {
+        method: 'PUT', apiKey, accessToken, form, failure: 'Kite order modification failed', timeoutMs,
       });
       return payload.data ?? payload;
+    },
+    /** Cancel an open/pending order. */
+    async cancelOrder({ apiKey, accessToken, variety = 'regular', orderId, timeoutMs }) {
+      const payload = await call(`/orders/${encodeURIComponent(variety)}/${encodeURIComponent(orderId)}`, {
+        method: 'DELETE', apiKey, accessToken, failure: 'Kite order cancellation failed', timeoutMs,
+      });
+      return payload.data ?? payload;
+    },
+    /** The day's order book (every order with its latest status, filled_quantity, average_price, tag). */
+    async orders({ apiKey, accessToken, timeoutMs = 10_000 }) {
+      const payload = await call('/orders', { apiKey, accessToken, failure: 'Kite order book request failed', timeoutMs });
+      return Array.isArray(payload.data) ? payload.data : [];
+    },
+    /** The day's executions. */
+    async trades({ apiKey, accessToken, timeoutMs = 10_000 }) {
+      const payload = await call('/trades', { apiKey, accessToken, failure: 'Kite trades request failed', timeoutMs });
+      return Array.isArray(payload.data) ? payload.data : [];
     },
   };
 }
