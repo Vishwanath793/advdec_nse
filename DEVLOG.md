@@ -40,6 +40,34 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-20: Conviction factors reach the backend only when changed (Claude Code for vinayakb374, android-app, local commit)
+**What changed:**
+- Before this fix, every browser that opened the Analyzer sent its own saved conviction factors to the backend
+  (`PUT /api/export/settings`), and the last page load won. The backend's copy (`.data/export-settings.json`) is
+  what the 09:20 decision and the 09:30 Excel export use. In testing, an in-app preview pane, and the older
+  `dist/` build that `npm run server` serves on :3002, overwrote the owner's Auction-layer choice.
+- Now a browser sends the factors only when they are **changed there**, not when the page loads.
+- A change the backend didn't accept is retried every 15 s, and at once when the page's live-update connection
+  reconnects. Until then a red note next to the export status says it isn't saved yet.
+
+**Files:** `src/App.jsx`.
+
+**Tests / checks:**
+- `npm test`: 216 pass. `npm run build` and `npx cap sync android` succeed.
+- Browser, with the settings request intercepted so the backend file was never written:
+  - a page load sends nothing;
+  - a change sends once;
+  - a failed send shows the note and retries after 15 s;
+  - once a retry succeeds, the note clears and retries stop.
+
+**Not verified / known:**
+- Through the Vite dev server (5173) the live-update connection doesn't notice a backend restart: the proxy keeps
+  the browser side open. So "send again on reconnect", and the existing Kite session re-share, don't fire there.
+  The 15 s retry covers the factors. The built app on :3002 connects directly.
+- A browser that never changes a factor never sends any, so the backend keeps whatever was last sent.
+
+**Next:** the owner should set the Auction-layer factors once in their own browser so the backend has them.
+
 ### 2026-10-20: Auction layer: the pre-open auction as it forms, from Kite /quote (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** the NSE 09:10 import only has the auction's final result. Since 7 Sep 2026, Kite's `/quote` updates
 during the pre-open, as Zerodha announced on the Kite Connect forum on 5 Sep 2026; the main quote docs don't list

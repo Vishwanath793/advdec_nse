@@ -34,6 +34,9 @@ import { AUCTION_FACTORS, AUCTION_GROUP } from './utils/auctionLayer.js';
 import { formatIST } from './NseScheduleSettings.jsx';
 import { loadSettings, saveSettings, loadSession, saveSession } from './store.js';
 
+/** A factor change the backend didn't accept is sent again this often until it does. */
+const FACTOR_RETRY_MS = 15_000;
+
 const STOCK_COLUMNS = [
   { key: 'symbol', label: 'Symbol' },
   { key: 'company', label: 'Company' },
@@ -248,8 +251,12 @@ export default function App() {
       setNseConnectionError(null);
     },
     (message) => setNseConnectionError(message),
-    // Connected or reconnected to the backend: it may have restarted and lost the Kite session.
-    () => shareKiteSessionRef.current(),
+    // Connected or reconnected to the backend: it may have restarted and lost the Kite session,
+    // or missed a factor change made while it was down.
+    () => {
+      shareKiteSessionRef.current();
+      if (unsentFactors.current) pushFactorsRef.current(unsentFactors.current);
+    },
   ), []);
 
   useEffect(() => {
@@ -663,11 +670,39 @@ export default function App() {
   };
   const updateMinMarketCap = (value) => updateSetting({ minMarketCapCr: Math.max(0, Number(value) || 0) });
 
-  // The backend's 9:30 file uses the factors chosen here.
+  // The backend's 9:30 file and 09:20 decision use the factors chosen here. Only changes made in this
+  // browser are sent, not the settings it opened with: otherwise any browser that loads the page (another
+  // PC, a preview pane) would overwrite the factors chosen elsewhere. A change the backend missed (it was
+  // down or restarting) is retried every FACTOR_RETRY_MS, and at once when this page reconnects to it.
+  const sentFactors = useRef(JSON.stringify(settings.convictionFactors ?? null));
+  const unsentFactors = useRef(null);
+  const factorRetry = useRef(null);
+  const [factorSyncError, setFactorSyncError] = useState(null);
+  const pushFactorsRef = useRef(null);
+  pushFactorsRef.current = (factors) => {
+    if (!api.exports) return;
+    clearTimeout(factorRetry.current);
+    unsentFactors.current = factors;
+    api.exports.saveSettings(factors)
+      .then((status) => {
+        if (unsentFactors.current === factors) unsentFactors.current = null;
+        setExportStatus(status);
+        setFactorSyncError(null);
+      })
+      .catch((e) => {
+        setFactorSyncError(e.message);
+        factorRetry.current = setTimeout(() => {
+          if (unsentFactors.current) pushFactorsRef.current(unsentFactors.current);
+        }, FACTOR_RETRY_MS);
+      });
+  };
+  useEffect(() => () => clearTimeout(factorRetry.current), []);
   useEffect(() => {
-    if (!api.exports) return undefined;
+    const json = JSON.stringify(settings.convictionFactors ?? null);
+    if (!api.exports || json === sentFactors.current) return undefined;
     const timer = setTimeout(() => {
-      api.exports.saveSettings(settings.convictionFactors).then(setExportStatus).catch(() => {});
+      sentFactors.current = json;
+      pushFactorsRef.current(settings.convictionFactors);
     }, 500);
     return () => clearTimeout(timer);
   }, [settings.convictionFactors]);
@@ -1514,6 +1549,9 @@ export default function App() {
                     : exportStatus
                       ? `Saved automatically at ${exportStatus.time} IST on trading days to ${exportStatus.dir}${exportStatus.last ? ` · last: ${exportStatus.last.file.split(/[\\/]/).pop()}` : ''}.`
                       : ''}
+                  {factorSyncError && (
+                    <span className="dec-text"> Factor change not saved on the backend yet ({factorSyncError}); retrying every {FACTOR_RETRY_MS / 1000} s.</span>
+                  )}
                 </span>
               </div>
             </div>
