@@ -22,6 +22,7 @@ import { createNseLiveService } from '../src/core/nseLive.js';
 import { createOpeningCollector } from '../src/core/openingCollector.js';
 import { createInstrumentService } from '../src/core/instruments.js';
 import { createHistoryService } from '../src/core/kiteHistory.js';
+import { createAuctionTracker } from '../src/core/auctionTracker.js';
 import { snapshotDate } from '../src/core/recorder.js';
 import { analyze } from '../src/utils/analysis.js';
 import { createTickLog } from './tickLog.js';
@@ -175,10 +176,18 @@ const recorder = createRecorder({
     ...await marketContext.get().then((c) => ({ events: c.events, market: c.market })).catch(() => ({})),
   }),
 });
-/** Add the recorded pre-open baseline (research columns) to a market context. */
+/**
+ * Add the recorded pre-open baseline (research columns) and that morning's Kite
+ * auction readings (Auction layer) to a market context.
+ */
 async function withPreopenBaseline(context) {
   if (!context?.date) return context;
-  return { ...context, preopen: await recorder.preopenBaseline(context.date).catch(() => null) };
+  return {
+    ...context,
+    preopen: await recorder.preopenBaseline(context.date).catch(() => null),
+    auction: await auctionTracker.features(context.date).catch(() => null),
+    auctionStatus: auctionTracker.status(),
+  };
 }
 // Record the saved snapshot too, in case it was fetched before the recorder existed.
 recorder.record(preopen.status().snapshot)
@@ -271,12 +280,21 @@ const orderScheduler = createOrderScheduler({
   placeOrder: (args) => kite.placeOrder(args),
 });
 orderScheduler.load().catch((error) => console.error(`Scheduled orders: ${error.message}`));
-addOrderRoutes(app, orderScheduler, { onSession: (s) => openingCollector.setSession(s) });
+addOrderRoutes(app, orderScheduler, { onSession: (s) => { openingCollector.setSession(s); auctionTracker.setSession(s); } });
 
 // Opening window 09:15–09:20 (Kite WebSocket) and the 09:20 decision with paper trading (milestone 2).
 const dataDir = fileURLToPath(new URL('../.data', import.meta.url));
 const readJsonFile = (name) => { try { return JSON.parse(readFileSync(`${dataDir}/${name}`, 'utf8')); } catch { return null; } };
 const tickLog = createTickLog(`${dataDir}/ticks`);
+const instrumentService = createInstrumentService({ store: fsStore(dataDir), kite });
+// Pre-open auction readings 09:00–09:09 (Kite /quote, read-only) for the Auction layer.
+const auctionTracker = createAuctionTracker({
+  store: fsStore(dataDir), kite, instruments: instrumentService, calendar,
+  symbols: () => currentMasterRows().map((r) => r.Symbol),
+});
+const wakeAuction = () => auctionTracker.wake().catch((error) => console.error(`Auction tracker: ${error.message}`));
+cron.schedule('58 8 * * 1-5', wakeAuction, { timezone: 'Asia/Kolkata', name: 'auction-tracker' });
+wakeAuction();
 const openingSubscribers = new Set();
 let openingLatest = { status: { phase: 'idle' }, rows: [] };
 // The scanner payload carries the trading view of the ledger it shows (the replay's, during a replay).
@@ -294,7 +312,7 @@ const tradingDesk = createTradingDesk({
 const openingCollector = createOpeningCollector({
   store: fsStore(dataDir),
   kite,
-  instruments: createInstrumentService({ store: fsStore(dataDir), kite }),
+  instruments: instrumentService,
   history: createHistoryService({ store: fsStore(dataDir), kite, calendar }),
   calendar,
   tickLog,

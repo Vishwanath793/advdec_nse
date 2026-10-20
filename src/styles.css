@@ -556,6 +556,8 @@ body {
 .market-research summary { cursor: pointer; }
 .factor-group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 14px 0 6px; padding-top: 10px; border-top: 1px solid var(--border); }
 .market-research-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px 24px; margin-top: 8px; }
+.auction-status { margin: 8px 0 0; }
+.auction-status.warn { color: var(--amber); }
 
 /* Stocks table download */
 .export-actions { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; }

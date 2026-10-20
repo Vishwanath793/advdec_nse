@@ -135,7 +135,9 @@ test('factors can be turned off or reweighted, and all-off means no score', () =
   assert.deepEqual(a.conviction.excluded, ['Sector strength', 'Market A/D agrees', '52-week breakout', 'Pre-open value',
     'Results catalyst', 'Relative volume', "Gap vs yesterday's range", 'Delivery % (yesterday)', "Yesterday's close in range",
     'Trend (5 & 20 sessions)', 'F&O OI build-up', 'GIFT Nifty', 'India VIX change', 'FII/DII flows',
-    'Gap vs its usual gap', 'Delivery quantity surge', "Yesterday's volume vs usual", 'Unusual OI build-up', '20-session strength vs sector']);
+    'Gap vs its usual gap', 'Delivery quantity surge', "Yesterday's volume vs usual", 'Unusual OI build-up', '20-session strength vs sector',
+    'Gap built during the auction', 'Gap-side orders held', 'Unmatched auction demand', 'Futures auction vs cash', 'Room to the circuit',
+    'Nifty futures pre-open']);
   assert.deepEqual(a.conviction.missing, []); // turned-off factors are not reported as missing data
 
   // Settings saved before a factor existed fall back to that factor's default.
@@ -268,7 +270,8 @@ test('weight shares are whole numbers that always add up to exactly 100', () => 
   assert.deepEqual(weightShares(factorWeights(DEFAULT_FACTOR_SETTINGS)),
     { gap: 20, sector: 20, orders: 20, market: 20, range: 0, value: 20, catalyst: 0, rvol: 0, prevRange: 0,
       delivery: 0, closeLoc: 0, trend: 0, oi: 0, gift: 0, vix: 0, flows: 0,
-      hGapNorm: 0, hDelivQty: 0, hVolume: 0, hOiRank: 0, hRsSector: 0 });
+      hGapNorm: 0, hDelivQty: 0, hVolume: 0, hOiRank: 0, hRsSector: 0,
+      aDrift: 0, aOrdersHeld: 0, aImbalance: 0, aFutures: 0, aRoom: 0, aNifty: 0 });
   const rand = rng(7);
   for (let i = 0; i < 2000; i++) {
     const weights = Object.fromEntries(KEYS.map((k) => [k, rand() < 0.3 ? 0 : Math.round(rand() * 100)]));
@@ -343,6 +346,15 @@ test('checking every factor scores with all of them when their data is there', (
       flows: { date: '2026-10-15', fii: 1500, dii: -800 },
     },
     events: { results: { AAA: [{ at: '2026-10-14T11:00:00.000Z', text: 'financial results' }] }, resultsDue: {}, exDates: {} },
+    // Auction layer inputs (utils/auctionLayer.js auctionFeatures).
+    auction: {
+      symbols: { AAA: {
+        iep: 101.5, prevClose: 100, gap: 1.5, at: Date.parse('2026-10-16T03:38:30Z'), earlyGap: 1, earlyAt: Date.parse('2026-10-16T03:34:00Z'),
+        buyShare: 0.7, avgBuyShare: 0.65, volume: 1000, buyQty: 700, sellQty: 300, imbalance: 400, lowerCircuit: 90, upperCircuit: 110,
+        future: { symbol: 'AAA26OCTFUT', gap: 1.7, iep: 102.2, volume: 50 },
+      } },
+      market: { nifty: { symbol: 'NIFTY26OCTFUT', gap: 0.3, at: Date.parse('2026-10-16T03:38:30Z') }, bank: null },
+    },
   };
   const [a] = analyze([row('AAA', 1.5, {
     'TOTAL BUY QTY': 700, 'TOTAL SELL QTY': 300, '52 WEEK HIGH': 150, '52 WEEK LOW': 60, 'FINAL VOLUME': 500,

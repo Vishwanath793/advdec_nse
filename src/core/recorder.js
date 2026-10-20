@@ -2,6 +2,8 @@ import { indiaDate, istInstant, marketDay } from './calendar.js';
 import { BHAV_READY_TIME, parseNseDate } from './marketContext.js';
 import { buildReportCard, dayTrades } from '../utils/reportCard.js';
 import { preopenBaseline as buildPreopenBaseline, preopenDaySummary, RESEARCH_DAYS } from '../utils/research.js';
+import { auctionFeatures } from '../utils/auctionLayer.js';
+import { auctionFile } from './auctionTracker.js';
 
 /**
  * Daily recorder. NSE only serves today's pre-open, so each trading day's
@@ -15,7 +17,8 @@ import { preopenBaseline as buildPreopenBaseline, preopenDaySummary, RESEARCH_DA
  *   recorded/YYYY-MM-DD.json       one day's snapshot (columnar) + morning inputs
  *   recorded/master-<id>.json      master lists, stored once per distinct list
  * Yesterday's ranges and average volumes come from the end-of-day files the
- * market-context service already keeps (bhav/YYYY-MM-DD.json).
+ * market-context service already keeps (bhav/YYYY-MM-DD.json), and the Kite
+ * pre-open readings from the auction tracker (auction/YYYY-MM-DD.json), when it ran.
  */
 
 export const RECORD_VERSION = 1;
@@ -76,6 +79,7 @@ export function createRecorder({ store, calendar, context, inputs, now = () => n
   const masters = new Map();
   const outcomes = new Map(); // date -> end-of-day rows (only once available)
   const preopenSummaries = new Map(); // date -> compact pre-open summary (research baseline)
+  const auctions = new Map(); // date -> auction features (or null)
   let writing = Promise.resolve();
 
   const readIndex = async () => (await store.read(INDEX)) ?? { days: [] };
@@ -206,6 +210,7 @@ export function createRecorder({ store, calendar, context, inputs, now = () => n
       const result = await outcome(date);
       if (result.pending) { pending.push({ date, reason: result.pending }); continue; }
       const stats = await context.statsBefore(date);
+      if (!auctions.has(date)) auctions.set(date, auctionFeatures(await store.read(auctionFile(date))));
       scored.push({
         date,
         trades: dayTrades({
@@ -213,7 +218,7 @@ export function createRecorder({ store, calendar, context, inputs, now = () => n
           rows: day.rows,
           masterRows: day.masterRows,
           secList: day.secList,
-          context: { history: { stats }, events: day.events, market: day.market ?? null },
+          context: { history: { stats }, events: day.events, market: day.market ?? null, auction: auctions.get(date) },
           outcome: result.rows,
           factorSettings,
           // On-time 9:20 readings only: a late one has a wider range than 9:15–9:20.

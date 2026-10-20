@@ -29,6 +29,8 @@ import { ModeBadge } from './TradingPanel.jsx';
 import { MarketResearch, RESEARCH_COLUMNS, ResearchCells, SectorBreadthCell } from './ResearchColumns.jsx';
 import { HISTORY_COLUMN, HistoryScore } from './HistoryLayer.jsx';
 import { HISTORY_FACTORS, HISTORY_GROUP } from './utils/historyLayer.js';
+import { AUCTION_COLUMN, AuctionScore, AuctionStatus } from './AuctionLayer.jsx';
+import { AUCTION_FACTORS, AUCTION_GROUP } from './utils/auctionLayer.js';
 import { formatIST } from './NseScheduleSettings.jsx';
 import { loadSettings, saveSettings, loadSession, saveSession } from './store.js';
 
@@ -709,9 +711,9 @@ export default function App() {
   const activeWeights = factorWeights(settings.convictionFactors);
   const showResearch = Boolean(settings.showResearch);
   const showHistoryLayer = settings.showHistoryLayer !== false;
-  const baseColumns = showHistoryLayer
-    ? STOCK_COLUMNS.flatMap((c) => (c.key === 'convictionScore' ? [c, HISTORY_COLUMN] : [c]))
-    : STOCK_COLUMNS;
+  const showAuctionLayer = settings.showAuctionLayer !== false;
+  const layerColumns = [...(showHistoryLayer ? [HISTORY_COLUMN] : []), ...(showAuctionLayer ? [AUCTION_COLUMN] : [])];
+  const baseColumns = STOCK_COLUMNS.flatMap((c) => (c.key === 'convictionScore' ? [c, ...layerColumns] : [c]));
   const stockColumns = showResearch ? [...baseColumns, ...RESEARCH_COLUMNS] : baseColumns;
   const activeShares = weightShares(activeWeights);
   const activeCount = Object.values(activeWeights).filter(Boolean).length;
@@ -725,10 +727,11 @@ export default function App() {
   const withWeight = (f) => ({ on: true, ...(factorSetting(f.key).weight > 0 ? {} : { weight: f.weight }) });
   const toggleFactor = (f, on) => updateFactor(f.key, on ? withWeight(f) : { on: false });
   const toggleAllFactors = (on) => updateSetting({ convictionFactors: allFactors((f) => (on ? withWeight(f) : { on: false })) });
-  // History layer: add all its factors to the conviction score, or take them all out (other factors untouched).
+  // History and Auction layers: add all of a layer's factors to the conviction score, or take them all out (other factors untouched).
   const historyOnCount = HISTORY_FACTORS.filter((f) => factorSetting(f.key).on).length;
-  const toggleHistoryFactors = (on) => updateSetting({
-    convictionFactors: allFactors((f) => (f.group !== HISTORY_GROUP ? {} : on ? withWeight(f) : { on: false })),
+  const auctionOnCount = AUCTION_FACTORS.filter((f) => factorSetting(f.key).on).length;
+  const toggleGroupFactors = (group, on) => updateSetting({
+    convictionFactors: allFactors((f) => (f.group !== group ? {} : on ? withWeight(f) : { on: false })),
   });
   // One conviction factor's row: on/off, weight slider and box, share and help.
   const renderFactorRow = (f) => {
@@ -1314,6 +1317,7 @@ export default function App() {
 
           {renderMarketSignals()}
           <MarketResearch context={marketContext} />
+          <AuctionStatus context={marketContext} />
 
           {/* Conviction factor controls */}
           <details className="conviction-settings">
@@ -1338,7 +1342,7 @@ export default function App() {
               <strong>{checkedCount === CONVICTION_FACTORS.length ? 'Uncheck all' : 'Check all'}</strong>
             </label>
             <div className="factor-grid">
-              {CONVICTION_FACTORS.filter((f) => f.group !== HISTORY_GROUP).map((f) => renderFactorRow(f))}
+              {CONVICTION_FACTORS.filter((f) => !f.group).map((f) => renderFactorRow(f))}
             </div>
             <div className="factor-group-head">
               <strong>History layer</strong>{' '}
@@ -1347,12 +1351,26 @@ export default function App() {
                 (NSE end-of-day files). It always shows as its own &ldquo;History&rdquo; score; add the factors here to also
                 count them in the conviction.
               </span>
-              <button type="button" className="btn ghost" onClick={() => toggleHistoryFactors(historyOnCount < HISTORY_FACTORS.length)}>
+              <button type="button" className="btn ghost" onClick={() => toggleGroupFactors(HISTORY_GROUP, historyOnCount < HISTORY_FACTORS.length)}>
                 {historyOnCount < HISTORY_FACTORS.length ? 'Add all to the conviction' : 'Remove all from the conviction'}
               </button>
             </div>
             <div className="factor-grid">
               {HISTORY_FACTORS.map((h) => renderFactorRow(CONVICTION_FACTORS.find((f) => f.key === h.key)))}
+            </div>
+            <div className="factor-group-head">
+              <strong>Auction layer</strong>{' '}
+              <span className="hint">
+                ({auctionOnCount} of {AUCTION_FACTORS.length} in the score) · how the pre-open auction formed, from Kite readings
+                every 15 s between 09:00 and the close of order entry (the backend records them when Kite is logged in before 09:00).
+                It always shows as its own &ldquo;Auction&rdquo; score; add the factors here to also count them in the conviction.
+              </span>
+              <button type="button" className="btn ghost" onClick={() => toggleGroupFactors(AUCTION_GROUP, auctionOnCount < AUCTION_FACTORS.length)}>
+                {auctionOnCount < AUCTION_FACTORS.length ? 'Add all to the conviction' : 'Remove all from the conviction'}
+              </button>
+            </div>
+            <div className="factor-grid">
+              {AUCTION_FACTORS.map((a) => renderFactorRow(CONVICTION_FACTORS.find((f) => f.key === a.key)))}
             </div>
             <div className="factor-actions">
               <button
@@ -1545,6 +1563,14 @@ export default function App() {
                 />
                 History score
               </label>
+              <label className="cap-filter" title="A separate 0–100 score from how the pre-open auction formed (Kite readings 09:00–09:09: gap drift, orders held, unmatched demand, futures vs cash, room to the circuit). Its factors join the conviction only when added in “Conviction factors”.">
+                <input
+                  type="checkbox"
+                  checked={showAuctionLayer}
+                  onChange={(e) => updateSetting({ showAuctionLayer: e.target.checked })}
+                />
+                Auction score
+              </label>
             </div>
             <div className="table-wrap tall">
               <table className="stock-table">
@@ -1595,6 +1621,7 @@ export default function App() {
                       </td>
                       <td className="num">{renderConviction(s)}</td>
                       {showHistoryLayer && <td className="num"><HistoryScore s={s} /></td>}
+                      {showAuctionLayer && <td className="num"><AuctionScore s={s} /></td>}
                       <td className="signals-cell wrap-cell">{renderSignals(s)}</td>
                       <td className="num circuit-cell">{renderCircuit(s)}</td>
                       <td>

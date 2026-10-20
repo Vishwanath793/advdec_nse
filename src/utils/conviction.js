@@ -1,4 +1,5 @@
 import { HISTORY_FACTORS, historyLayerFactors } from './historyLayer.js';
+import { AUCTION_FACTORS, auctionLayerFactors } from './auctionLayer.js';
 
 /**
  * Gap-continuation conviction score (0–100) for each gapped stock.
@@ -54,6 +55,8 @@ export const CONVICTION_FACTORS = [
   { key: 'flows', label: 'FII/DII flows', weight: 20, defaultOn: false, marketWide: true, help: "Yesterday's FII net buying (DII shown for reference): buying supports gap-ups, selling gap-downs. Full marks at ±₹3,000 Cr." },
   // History layer (utils/historyLayer.js): off by default, add one by one or all together.
   ...HISTORY_FACTORS,
+  // Auction layer (utils/auctionLayer.js, Kite pre-open readings): off by default, the same way.
+  ...AUCTION_FACTORS,
 ];
 
 /** Full-strength points for the newer factors. */
@@ -331,7 +334,7 @@ function factorScores(stock, dir, ctx) {
     out.value = { value: rank, detail: `₹${stock.valueCr.toFixed(2)} Cr traded in pre-open (higher than ${pct(rank)} of stocks)` };
   }
 
-  Object.assign(out, historyFactors(stock, dir), marketFactors(ctx.market, dir), historyLayerFactors(stock, dir));
+  Object.assign(out, historyFactors(stock, dir), marketFactors(ctx.market, dir), historyLayerFactors(stock, dir), auctionLayerFactors(stock, dir));
   return out;
 }
 

@@ -150,7 +150,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
 
   const header = [
     'Symbol', 'Company', 'Sector', 'Market cap (₹ Cr)', 'Prev close', 'Final price', 'Change', '% change', 'Status',
-    'Pre-open value (₹ Cr)', 'Conviction', 'History score', 'History factors (0–100)', 'Direction', 'Score before cap', 'Capped by', 'Flags', 'Signals',
+    'Pre-open value (₹ Cr)', 'Conviction', 'History score', 'History factors (0–100)', 'Auction score', 'Auction factors (0–100)', 'Direction', 'Score before cap', 'Capped by', 'Flags', 'Signals',
     'Lower circuit', 'Upper circuit', 'Band',
     ...RESEARCH_HEADERS,
     ...CONVICTION_FACTORS.flatMap((f) => [`${f.label} score`, `${f.label} weight`]),
@@ -166,6 +166,8 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
       c?.score ?? null,
       s.historyScore ?? null,
       (s.historyLayer?.factors ?? []).map((f) => `${f.label} ${Math.round(f.value * 100)}`).join(', ') || null,
+      s.auctionScore ?? null,
+      (s.auctionLayer?.factors ?? []).map((f) => `${f.label} ${Math.round(f.value * 100)}`).join(', ') || null,
       c ? (c.direction === 'up' ? 'Gap-up' : 'Gap-down') : null,
       c?.rawScore != null && c.rawScore !== c.score ? c.rawScore : null,
       c?.cappedBy && c.rawScore > c.score ? c.cappedBy.join(', ') : null,
@@ -209,6 +211,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
     [`Gaps under ${MIN_GAP_PCT}% and rows with inconsistent NSE data are not scored.`],
     [`T2T and circuit-locked stocks are capped at ${BLOCKED_SCORE_CAP} ("Score before cap" shows the uncapped score).`],
     ['History score: a separate 0–100 score from each stock’s own last 20 sessions (equal weights over the history factors with data). Its factors count in the conviction only when turned on.'],
+    ['Auction score: a separate 0–100 score from how the pre-open auction formed (Kite /quote readings 09:00–09:09, recorded by the backend; empty when it did not run). Its factors count in the conviction only when turned on.'],
     ['Research columns (× 20d, RS, OI rank) compare each stock with its own previous 20 completed sessions; "days" is how many had data. They are not in the conviction score.'],
   ];
 

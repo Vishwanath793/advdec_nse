@@ -287,6 +287,11 @@ Paper trading only. Every threshold is a hypothesis, not a known edge.
   - Statuses: COMPLETE, REJECTED, CANCELLED, OPEN, TRIGGER PENDING.
   - Fields `filled_quantity`, `pending_quantity`, `average_price`; `GET /trades` returns executions.
   - Autoslice makes at most 10 slices. A successful placement is **not** an execution.
+- **Pre-open (since 7 Sep 2026; forum announcement of 5 Sep 2026, not yet in the quote docs):** during
+  09:00–09:08, `/quote` updates `ohlc.open` (the indicative equilibrium price), `volume` (indicative), `buy_quantity`,
+  `sell_quantity` and `total_imbalance_qty` (renamed from `total_imbalance`), for equity cash and derivatives. The
+  WebSocket isn't confirmed to carry these fields. Kite's historical data has no pre-open, so the app records it
+  itself (`core/auctionTracker.js`). Not yet checked in a live session.
 - `TokenException` is a 403 and means log in again. "Insufficient permission" means the Kite app has no
   market-data subscription.
 

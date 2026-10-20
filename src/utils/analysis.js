@@ -5,6 +5,7 @@ import { tradeFlags } from './tradeability.js';
 import { applySignals } from './signals.js';
 import { applyResearch, applySectorResearch } from './research.js';
 import { applyHistoryLayer } from './historyLayer.js';
+import { applyAuctionLayer, attachAuction } from './auctionLayer.js';
 
 const num = (v) => {
   const n = toNumber(v);
@@ -171,6 +172,7 @@ export function analyze(pmRows, masterRows, secList = null, options = {}) {
   }
   applySignals(stocks, options.context);
   applyResearch(stocks, options.context); // research columns only: not part of any score
+  attachAuction(stocks, options.context?.auction); // Kite pre-open readings, when recorded
   for (const stock of stocks) stock.flags = tradeFlags(stock);
 
   const sectors = applySectorResearch([...sectorMap.values()].sort((a, b) => b.total - a.total), options.context);
@@ -179,6 +181,7 @@ export function analyze(pmRows, masterRows, secList = null, options = {}) {
   const summary = { total, advances, declines, unchanged, skipped, adRatio };
   scoreConviction(stocks, sectors, summary, options.convictionFactors, options.context?.market ?? null);
   applyHistoryLayer(stocks); // the separate History score (its factors join the conviction only when turned on)
+  applyAuctionLayer(stocks); // the separate Auction score, the same way
 
   return {
     summary,

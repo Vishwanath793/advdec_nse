@@ -75,6 +75,7 @@ export function dayTrades({ date, rows, masterRows, secList, context, outcome, f
       gap: s.pctChange,
       score: s.convictionScore,
       history: s.historyScore ?? null, // the separate History-layer score (utils/historyLayer.js)
+      auction: s.auctionScore ?? null, // the separate Auction-layer score (utils/auctionLayer.js)
       tradeable: isTradeable(s),
       factors: Object.fromEntries((allOn.get(s.symbol)?.conviction?.factors ?? []).map((f) => [f.key, f.value])),
       ret: move(day.close),
@@ -181,6 +182,7 @@ export function buildReportCard(days) {
     picks[name] = {
       conviction: tradeStats(daily((t2) => topBy(t2.filter((x) => x.tradeable), (x) => x.score))),
       history: tradeStats(daily((t2) => topBy(t2.filter((x) => x.tradeable && x.history != null), (x) => x.history))),
+      auction: tradeStats(daily((t2) => topBy(t2.filter((x) => x.tradeable && x.auction != null), (x) => x.auction))),
       gap: tradeStats(daily((t2) => topBy(t2, (x) => Math.abs(x.gap)))),
       all: tradeStats(t),
     };

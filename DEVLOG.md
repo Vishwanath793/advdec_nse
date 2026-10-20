@@ -41,6 +41,65 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-20: Auction layer: the pre-open auction as it forms, from Kite /quote (Claude Code for vinayakb374, android-app, local commit)
+**What changed:** the NSE 09:10 import only has the auction's final result. Since 7 Sep 2026, Kite's `/quote` updates
+during the pre-open, as Zerodha announced on the Kite Connect forum on 5 Sep 2026; the main quote docs don't list
+this yet. The fields are `ohlc.open` (the indicative equilibrium price), `volume`, `buy_quantity`, `sell_quantity`
+and `total_imbalance_qty`. Two pieces now use them:
+- **A recorder** (`core/auctionTracker.js`, backend only, read-only):
+  - On trading days, from 09:00:05 to 09:09:45, it reads `/quote` every 15 s for the master-list stocks, their
+    near-month futures and the NIFTY / BANKNIFTY futures. That is about 970 instruments, so two requests a sweep,
+    within Kite's limit of one a second.
+  - Each sweep is saved to `.data/auction/YYYY-MM-DD.json`. After a restart it continues the same file.
+  - Without a session it shows "needs-kite" and keeps trying until 09:09:45. On a 403 the error is shown with the
+    token redacted.
+  - It shares the instruments service with the opening collector. It is woken at 08:58, on start-up, and when a
+    Kite session is handed over.
+- **A layer on top of the conviction** (`utils/auctionLayer.js`), built the same way as the History layer.
+  **Default scores are unchanged** (a test checks this). The six factors are all **off by default**; every
+  threshold is a hypothesis:
+  - **Gap built during the auction:** the indicative gap at 09:04 vs the end of order entry.
+  - **Gap-side orders held:** the final buy/sell share vs its average through the auction (orders pulled late
+    count against the gap).
+  - **Unmatched auction demand:** the imbalance ÷ matched volume. The side comes from the buy/sell totals unless
+    the imbalance is negative.
+  - **Futures auction vs cash:** the near-month future's gap minus the stock's gap.
+  - **Room to the circuit:** distance to Kite's circuit limit.
+  - **Nifty futures pre-open** (market-wide).
+  - It also gives a separate **Auction score** (the stock's own five factors, equal weights, 2 or more needed).
+- **Where it shows:**
+  - Analyzer: an Auction column and an "Auction score" checkbox.
+  - "Conviction factors" → *Auction layer*, with Add all / Remove all.
+  - A status line under the market panel.
+  - Report card: per-factor verdicts, plus "Top 5 by Auction score".
+  - Excel: Auction score and Auction factors.
+- The context now carries `auction` and `auctionStatus` (`withPreopenBaseline` in `server/index.js`). The report
+  card reads `auction/DATE.json` for past days.
+
+**Files:**
+- New: `src/core/auctionTracker.js`, `src/utils/auctionLayer.js`, `src/AuctionLayer.jsx`,
+  `server/auctionLayer.test.js` (added to `npm test`).
+- Changed: `utils/conviction.js`, `utils/analysis.js`, `core/recorder.js`, `utils/reportCard.js`,
+  `utils/exportStocks.js`, `App.jsx` (the layer toggle is now shared: `toggleGroupFactors`), `ReportCardPage.jsx`,
+  `styles.css`, `server/index.js`, `server/conviction.test.js` (factor lists).
+
+**Tests / checks:**
+- `npm test`: 193 pass. `npm run build` and `npx cap sync android` succeed.
+- Browser (the frontend already running on 5173, against the real 19 Oct snapshot): the Auction column,
+  checkbox and factor group render, with no console errors.
+
+**Not verified:**
+- **Nothing has run against Kite in a real pre-open.** Still to check: that `ohlc.open` is 0 or absent before an
+  equilibrium exists, the sign of `total_imbalance_qty`, whether stock futures have a usable pre-open price, and
+  when order entry really closes. The forum thread disputes it: "09:08" vs "after 09:09".
+- The running backend (port 3002, another session) was **not restarted**, so it doesn't record yet. Restart it
+  before 09:00, and log in to Kite before 09:00.
+- The Android app has no recorder, so it has no auction data and these factors are left out there.
+
+**Next:**
+- After the first live morning, open `.data/auction/DATE.json` and check those fields.
+- After about 10 recorded days, read each factor's verdict and "Top 5 by Auction score" before turning any factor on.
+
 ### 2026-10-20: History layer: inference from the 20-session end-of-day history (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** an optional layer **on top of** the conviction score, built only from `context.history.stats`.
 **Default scores are unchanged** (a test checks this).
