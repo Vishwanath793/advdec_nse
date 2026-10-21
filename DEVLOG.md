@@ -40,6 +40,42 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-21: Auction layer: gap built and orders held measured over order entry only (Claude Code for vinayakb374, android-app, local commit)
+**Why:** the imbalance had already been moved to the close-of-entry reading, but the drift used the last
+reading and orders-held used the last buy share against an average that included readings after the matching
+(raised in `docs/analyzer-review-2026-10-21.md`, section D). The matching changes pending orders, so this could
+read "pulled late" for orders that never changed during entry.
+
+**What changed:**
+- `auctionFeatures`:
+  - New close-of-entry fields: `gapAtClose`, `buyShareAtClose`, `avgBuyShareToClose` (average of readings up to
+    the close only, needs 3), `entryReadings`.
+  - The early (09:04) gap now needs 2 minutes before the close, not before the last reading.
+  - The final values (`gap`, `buyShare`, `avgBuyShare`, `iep`) are unchanged and still used by room to the circuit
+    and futures vs cash (the final equilibrium).
+- `auctionEntry(a)` returns the entry readings. Features made before these fields existed fall back to the final
+  values, but a null entry value stays null.
+- `aDrift` and `aOrdersHeld` (the Auction score and its conviction factors) and the Stock filter's *Gap built* and
+  *Orders held* use them. Their hover text names the close of order entry.
+- `docs/analyzer-review-repro.mjs`: one line made null-safe (its counter-example now correctly has no orders-held
+  reading). Section D of the review document is marked fixed.
+
+**Effect on the real 21 Oct file** (close of entry 09:08:49, 740 stocks):
+- orders held changed by more than 1 point for 340 stocks and flipped sign for 8 (e.g. GAIL −3.0 → +3.9 pts,
+  AUBANK −3.2 → +3.5);
+- the gap moved after the matching by more than 0.05 point for 39 stocks.
+
+**Files:** `src/utils/auctionLayer.js`, `src/utils/screener.js`, `server/auctionLayer.test.js`,
+`server/screener.test.js`, `docs/analyzer-review-repro.mjs`, `docs/analyzer-review-2026-10-21.md`.
+
+**Tests / checks:** `npm test`: 239 pass (2 new tests, including the review's counter-example and the
+too-few-readings case). `npm run build` and `npx cap sync android` succeed. The repro script runs.
+
+**Not verified:**
+- The running app shows this only once the backend has an auction recording to compute from. This folder's
+  `.data` has none for 21 Oct; the old backend recorded it in `C:\Users\DELL\advdec_nse\.data`.
+- Still open from the review: per-batch receipt times, and a confidence label for the inferred close.
+
 ### 2026-10-21: Commit the remaining uncommitted files in the shared folder, at the owner's request (Claude Code for vinayakb374, android-app)
 **What changed:** all files that had been left uncommitted were committed as they were, without edits:
 - `vite.config.js`: the dev proxy's backend port can be set with `BACKEND_PORT` (default still 3001), for when

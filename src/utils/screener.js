@@ -30,7 +30,7 @@
  * any threshold, so it doesn't move as filters change. A ranking, not a forecast.
  */
 
-import { auctionImbalance } from './auctionLayer.js';
+import { auctionEntry, auctionImbalance } from './auctionLayer.js';
 
 export const MIN_QUALITY_METRICS = 3;
 export const SCREENER_LIMIT = 200;
@@ -127,6 +127,7 @@ export function screenerMetrics(s, valuesSorted) {
   const buyPct = s.buyQty != null && s.sellQty != null && pendingTotal > 0 ? (s.buyQty / pendingTotal) * 100 : null;
   // Same readings as the Auction layer's factors (auctionLayer.js), kept in raw units for typed thresholds.
   const imb = auctionImbalance(a);
+  const e = auctionEntry(a);
   return {
     dir,
     absGap: s.pctChange != null ? Math.abs(s.pctChange) : null,
@@ -137,8 +138,9 @@ export function screenerMetrics(s, valuesSorted) {
     valuePct: s.valueCr != null && valuesSorted.length ? shareBelow(valuesSorted, s.valueCr) * 100 : null,
     delivPct: s.delivPct ?? null,
     delivQtyX: s.delivQtyX ?? null,
-    driftPts: a?.gap != null && a.earlyGap != null ? dir * (a.gap - a.earlyGap) : null,
-    heldPts: a?.buyShare != null && a.avgBuyShare != null ? dir * (a.buyShare - a.avgBuyShare) * 100 : null,
+    // Order entry only, up to its close (auctionEntry), like the Auction layer's factors.
+    driftPts: e?.gap != null && e.earlyGap != null ? dir * (e.gap - e.earlyGap) : null,
+    heldPts: e?.buyShare != null && e.avgBuyShare != null ? dir * (e.buyShare - e.avgBuyShare) * 100 : null,
     imbalanceX: imb ? dir * imb.side * imb.x : null,
     futuresPts: a?.future?.gap != null && a.future.volume > 0 && a.gap != null ? dir * (a.future.gap - a.gap) : null,
   };

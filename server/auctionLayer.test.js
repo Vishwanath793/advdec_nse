@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyAuctionLayer, AUCTION_FACTORS, auctionFeatures, auctionLayerFactors, closeOfEntryAt } from '../src/utils/auctionLayer.js';
+import { applyAuctionLayer, AUCTION_FACTORS, auctionEntry, auctionFeatures, auctionLayerFactors, closeOfEntryAt } from '../src/utils/auctionLayer.js';
 import { AUCTION_END_MS, auctionFile, createAuctionTracker, SWEEP_EVERY_MS } from '../src/core/auctionTracker.js';
 import { analyze } from '../src/utils/analysis.js';
 import { CONVICTION_FACTORS, DEFAULT_FACTOR_SETTINGS } from '../src/utils/conviction.js';
@@ -88,6 +88,52 @@ test('the imbalance is read before the matching, when Kite resets it to 0 for ev
   assert.equal(up.aImbalance.value, 1); // 2,000 unmatched ÷ 2,000 matched, as before the matching
   assert.match(up.aImbalance.detail, /09:08:30/);
   assert.equal(closeOfEntryAt([{ t: 1, q: [[0, 1, 1, 1, 1, 0]] }]), null); // no imbalance data at all
+});
+
+test('drift and orders held are measured over order entry only, not the readings after the matching', () => {
+  // The review's counter-example: 90% buy orders at the close of entry, then 10% after the matching,
+  // and the indicative gap moving after the close. Neither change happened during order entry.
+  const t = (time) => +new Date(`2026-10-21T${time}+05:30`);
+  const f = auctionFeatures({
+    version: 1, date: '2026-10-21', keys: ['NSE:A'], meta: [[100, 80, 120]], futures: {},
+    snaps: [
+      { t: t('09:03:00'), q: [[0, 101, 100, 85, 15, 60]] },
+      { t: t('09:04:00'), q: [[0, 101, 100, 80, 20, 60]] },
+      { t: t('09:07:00'), q: [[0, 102, 100, 90, 10, 80]] }, // close of order entry
+      { t: t('09:09:00'), q: [[0, 103.5, 100, 10, 90, 0]] }, // after the matching
+    ],
+  }).symbols.A;
+  assert.equal(f.closeAt, t('09:07:00'));
+  close(f.gapAtClose, 2);
+  close(f.gap, 3.5); // the final equilibrium is still kept
+  close(f.buyShareAtClose, 0.9);
+  close(f.avgBuyShareToClose, (0.85 + 0.8 + 0.9) / 3); // the post-matching 10% is left out
+  assert.equal(f.entryReadings, 3);
+  close(f.buyShare, 0.1); // final reading, unchanged meaning
+  const up = auctionLayerFactors({ auction: f }, 1);
+  // Orders: 90% at the close vs 85% average through entry → added late, supports a gap-up (before: fully against).
+  close(up.aOrdersHeld.value, 0.5 + 0.5 * ((0.9 - 0.85) / 0.1));
+  assert.match(up.aOrdersHeld.detail, /close of order entry \(09:07:00\)/);
+  // Drift: 1% at 09:04 → 2% at the close (not the 3.5% after the matching).
+  assert.equal(up.aDrift.value, 1);
+  assert.match(up.aDrift.detail, /\+2\.00% at 09:07:00 \(close of order entry\)/);
+  // Room to the circuit still uses the final equilibrium price.
+  close(up.aRoom.value, Math.min(1, ((120 / 103.5 - 1) * 100) / 3));
+  // Features computed before these fields existed fall back to the final reading.
+  const old = auctionEntry({ gap: 1.5, at: 5, earlyGap: 1, earlyAt: 1, buyShare: 0.6, avgBuyShare: 0.5 });
+  assert.deepEqual([old.gap, old.buyShare, old.avgBuyShare], [1.5, 0.6, 0.5]);
+  // Too few entry readings for an average: no orders-held reading, rather than mixing in post-matching readings.
+  const short = auctionFeatures({
+    version: 1, date: '2026-10-21', keys: ['NSE:A'], meta: [[100, 80, 120]], futures: {},
+    snaps: [
+      { t: t('09:04:00'), q: [[0, 101, 100, 80, 20, 60]] },
+      { t: t('09:07:00'), q: [[0, 102, 100, 90, 10, 80]] },
+      { t: t('09:09:00'), q: [[0, 102, 100, 10, 90, 0]] },
+    ],
+  }).symbols.A;
+  assert.equal(short.avgBuyShareToClose, null);
+  assert.equal(auctionEntry(short).avgBuyShare, null);
+  assert.equal(auctionLayerFactors({ auction: short }, 1).aOrdersHeld, undefined);
 });
 
 test('a negative imbalance is taken as the sell side', () => {

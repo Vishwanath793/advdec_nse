@@ -97,20 +97,30 @@ function instrumentFeatures(points, meta, ref, close) {
   const [prevClose = null, lower = null, upper = null] = meta ?? [];
   const last = points.at(-1);
   const early = [...points].reverse().find((p) => p.t <= ref);
-  // Imbalance (with the volume and order totals it is compared with) from before the matching.
+  // The close-of-entry reading (the last one before the matching): the drift, the order shares and the
+  // imbalance are measured up to here, so orders changed by the matching don't count as pulled or added.
   const atClose = [...points].reverse().find((p) => p.t <= close) ?? last;
+  const entry = points.filter((p) => p.t <= atClose.t);
   const share = (p) => (p.buy + p.sell > 0 ? p.buy / (p.buy + p.sell) : null);
+  const avg = (xs) => (xs.length >= 3 ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
   const shares = points.map(share).filter((s) => s != null);
+  const entryShares = entry.map(share).filter((s) => s != null);
   return {
+    // Final readings (after the matching: the equilibrium the stock opens at).
     iep: last.iep,
     prevClose,
     gap: gapOf(last.iep, prevClose),
     at: last.t,
     readings: points.length,
-    earlyGap: early && last.t - early.t >= MIN_DRIFT_MS ? gapOf(early.iep, prevClose) : null,
-    earlyAt: early?.t ?? null,
     buyShare: share(last),
-    avgBuyShare: shares.length >= 3 ? shares.reduce((a, b) => a + b, 0) / shares.length : null,
+    avgBuyShare: avg(shares),
+    // Order entry, up to its close.
+    gapAtClose: gapOf(atClose.iep, prevClose),
+    earlyGap: early && atClose.t - early.t >= MIN_DRIFT_MS ? gapOf(early.iep, prevClose) : null,
+    earlyAt: early?.t ?? null,
+    buyShareAtClose: share(atClose),
+    avgBuyShareToClose: avg(entryShares),
+    entryReadings: entry.length,
     volume: last.volume ?? null,
     buyQty: last.buy ?? null,
     sellQty: last.sell ?? null,
@@ -189,6 +199,27 @@ export function auctionImbalance(a) {
 }
 
 /**
+ * The order-entry readings used by the drift and orders-held factors (and the
+ * Stock filter): the indicative gap and the buy share at the close of order
+ * entry, and the average buy share through order entry only. Features without
+ * the close-of-entry fields fall back to the final reading.
+ */
+export function auctionEntry(a) {
+  if (!a) return null;
+  // Only features made before these fields existed fall back; a null here (e.g. fewer than three
+  // entry readings for the average) stays null rather than borrowing a post-matching value.
+  const hasEntry = 'buyShareAtClose' in a;
+  return {
+    gap: hasEntry ? a.gapAtClose ?? null : a.gap ?? null,
+    at: hasEntry ? a.closeAt ?? null : a.at ?? null,
+    earlyGap: a.earlyGap ?? null,
+    earlyAt: a.earlyAt ?? null,
+    buyShare: hasEntry ? a.buyShareAtClose ?? null : a.buyShare ?? null,
+    avgBuyShare: hasEntry ? a.avgBuyShareToClose ?? null : a.avgBuyShare ?? null,
+  };
+}
+
+/**
  * The auction factors for one stock in direction `dir` (+1 gap-up, −1 gap-down):
  * { key: { value 0..1, detail } } for the factors that have data.
  */
@@ -198,20 +229,22 @@ export function auctionLayerFactors(stock, dir) {
   if (!a) return out;
   const up = dir > 0;
 
-  if (a.gap != null && a.earlyGap != null) {
-    const change = a.gap - a.earlyGap;
-    const value = 0.5 + 0.5 * clampSigned((dir * change) / Math.max(Math.abs(a.earlyGap), DRIFT_MIN_BASE_PTS));
+  // Both measured over order entry only (up to its close), not after the matching.
+  const e = auctionEntry(a);
+  if (e.gap != null && e.earlyGap != null) {
+    const change = e.gap - e.earlyGap;
+    const value = 0.5 + 0.5 * clampSigned((dir * change) / Math.max(Math.abs(e.earlyGap), DRIFT_MIN_BASE_PTS));
     const kind = Math.abs(change) < 0.05 ? 'held steady' : dir * change > 0 ? 'built' : 'faded';
-    out.aDrift = { value, detail: `Indicative gap ${signed(a.earlyGap)}% at ${hhmm(a.earlyAt)} → ${signed(a.gap)}% at ${hhmm(a.at)}: ${kind}, ${leaning(value)}` };
+    out.aDrift = { value, detail: `Indicative gap ${signed(e.earlyGap)}% at ${hhmm(e.earlyAt)} → ${signed(e.gap)}% at ${hhmm(e.at)} (close of order entry): ${kind}, ${leaning(value)}` };
   }
 
-  if (a.buyShare != null && a.avgBuyShare != null) {
-    const late = a.buyShare - a.avgBuyShare;
+  if (e.buyShare != null && e.avgBuyShare != null) {
+    const late = e.buyShare - e.avgBuyShare;
     const value = 0.5 + 0.5 * clampSigned((dir * late) / HELD_FULL_PTS);
     const side = (s) => pct(up ? s : 1 - s);
     out.aOrdersHeld = {
       value,
-      detail: `${side(a.buyShare)} of pending orders on the ${up ? 'buy' : 'sell'} side at the end vs ${side(a.avgBuyShare)} on average through the auction: ${Math.abs(late) < 0.01 ? 'unchanged' : dir * late > 0 ? 'added late' : 'pulled late'}, ${leaning(value)}`,
+      detail: `${side(e.buyShare)} of pending orders on the ${up ? 'buy' : 'sell'} side at the close of order entry (${hhmm(e.at)}) vs ${side(e.avgBuyShare)} on average through order entry: ${Math.abs(late) < 0.01 ? 'unchanged' : dir * late > 0 ? 'added late' : 'pulled late'}, ${leaning(value)}`,
     };
   }
 

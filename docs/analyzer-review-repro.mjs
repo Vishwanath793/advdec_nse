@@ -33,7 +33,7 @@ const a = auctionFeatures({date: '2026-10-21', keys: ['NSE:A'], meta: [[100, 80,
 ]}).symbols.A;
 assert.equal(a.closeAt, t('09:07:00'));
 assert.equal(a.buyShare, .1);
-report.auctionPhase = { inferredClose: new Date(a.closeAt).toISOString(), closeBuyShare: a.buyAtClose / (a.buyAtClose + a.sellAtClose), ordersHeldUsesBuyShare: a.buyShare, heldScore: auctionLayerFactors({ auction: a }, 1).aOrdersHeld.value };
+report.auctionPhase = { inferredClose: new Date(a.closeAt).toISOString(), closeBuyShare: a.buyAtClose / (a.buyAtClose + a.sellAtClose), ordersHeldUsesBuyShare: a.buyShare, heldScore: auctionLayerFactors({ auction: a }, 1).aOrdersHeld?.value ?? null }; // null since 21 Oct: too few order-entry readings, post-matching ones excluded
 const baseline = preopenBaseline(Array.from({ length: 5 }, (_, i) => ({ date: `2026-10-${10+i}`, symbols: { A: [i === 0 ? 100 : null, 1] }, sectors: {} })));
 const research = applyResearch([{ symbol: 'A', finalVolume: 200, valueCr: 2 }], { preopen: baseline })[0];
 assert.equal(research.preRvolX, 2);

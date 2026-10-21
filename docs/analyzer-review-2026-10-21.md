@@ -102,6 +102,13 @@ Require or infer an explicit CSV trading date. Create one immutable analysis inp
 
 ### D. Correct Auction phase handling
 
+> **Update, 21 Oct 2026 (later the same day):** fixed. Drift and orders-held are now measured over order entry
+> only: the gap and buy share at the close-of-entry reading, and the average buy share over readings up to it
+> (`auctionEntry` in `src/utils/auctionLayer.js`). Final post-matching values are kept separately (`gap`,
+> `buyShare`). With fewer than three entry readings there is no orders-held reading. The repro script now
+> reports `heldScore: null` for the counter-example below. Per-batch receipt times and a confidence label for the
+> inferred boundary are still open.
+
 The tracker records until approximately 09:09:45. `closeOfEntryAt` estimates the close from the last sweep with at least half the peak count of non-zero imbalances. Only imbalance and its related quantities use that close reading. Drift and orders-held still use `last`; average order share includes all readings (`src/utils/auctionLayer.js:98`).
 
 Reproduced: 90% buy share at inferred close followed by 10% after matching yields a fully negative orders-held factor. That does not establish that participants cancelled demand before entry closed. A change in share also cannot alone distinguish cancellation from changes on the opposite side.

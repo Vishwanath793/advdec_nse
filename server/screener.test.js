@@ -82,6 +82,16 @@ test('auction readings: orders held, unmatched demand and futures vs cash, in th
   assert.deepEqual(names({ thresholds: { minHeld: 5, minImbalance: 0.3, minFutures: 0.2 } }), ['A']);
 });
 
+test('Gap built and Orders held use order entry up to its close, not the final readings', () => {
+  const auction = {
+    gap: 3.5, earlyGap: 1, buyShare: 0.1, avgBuyShare: 0.6, // final readings (after the matching)
+    gapAtClose: 2, buyShareAtClose: 0.9, avgBuyShareToClose: 0.85, // order entry
+  };
+  const m = screenerMetrics(stock('A', { auction }), []);
+  assert.ok(Math.abs(m.driftPts - 1) < 1e-9); // 1% → 2%, not → 3.5%
+  assert.ok(Math.abs(m.heldPts - 5) < 1e-9); // 90% vs 85%, not 10% vs 60%
+});
+
 test('the buy/sell orders minimum reads the gap side, the buy side or the sell side', () => {
   const stocks = [stock('UP', { buyQty: 700, sellQty: 300 }), stock('DOWN', { status: 'decline', pctChange: -1, buyQty: 300, sellQty: 700 })];
   const names = (settings) => screenStocks(stocks, settings).matched.map((r) => r.stock.symbol).sort();
