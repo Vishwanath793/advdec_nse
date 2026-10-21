@@ -1,0 +1,62 @@
+{
+  "sparseScore": {
+    "score": 100,
+    "available": [
+      "gap"
+    ],
+    "missing": [
+      "Buy/sell orders",
+      "Pre-open value",
+      "Relative volume"
+    ]
+  },
+  "inconsistent": {
+    "conviction": null,
+    "tradeable": true,
+    "screenerMatches": 1
+  },
+  "pctMismatch": {
+    "status": "advance",
+    "pctChange": -5,
+    "dataIssue": null,
+    "score": 25
+  },
+  "duplicateRows": {
+    "uniqueSymbols": 1,
+    "total": 2
+  },
+  "auctionPhase": {
+    "inferredClose": "2026-10-21T03:37:00.000Z",
+    "closeBuyShare": 0.9,
+    "ordersHeldUsesBuyShare": 0.1,
+    "heldScore": 0
+  },
+  "baselineCoverage": {
+    "actualVolumeDays": 1,
+    "reportedDays": 5,
+    "preRvolX": 2
+  },
+  "compressedHistory": {
+    "availableDates": [
+      "2026-10-16",
+      "2026-10-20"
+    ],
+    "close1": 100,
+    "avgAbsGap": 10.000000000000009
+  },
+  "localRecordedDays": [
+    "2026-10-15",
+    "2026-10-16",
+    "2026-10-19",
+    "2026-10-21"
+  ],
+  "localAuctionDirectoryPresent": false,
+  "latestArchive": {
+    "date": "2026-10-21",
+    "marketUpdatedAt": "21-Oct-2026 09:08:44",
+    "rows": 2278,
+    "uniqueSymbols": 2278,
+    "eventsDate": "2026-10-21",
+    "marketDate": "2026-10-21"
+  }
+}

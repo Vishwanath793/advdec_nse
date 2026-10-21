@@ -40,6 +40,28 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-21: Commit the remaining uncommitted files in the shared folder, at the owner's request (Claude Code for vinayakb374, android-app)
+**What changed:** all files that had been left uncommitted were committed as they were, without edits:
+- `vite.config.js`: the dev proxy's backend port can be set with `BACKEND_PORT` (default still 3001), for when
+  another app uses 3001.
+- `.claude/launch.json`: local dev-server configurations (3001/5173 plus 3002 and 5174 variants); CLAUDE.md
+  already refers to it.
+- **Milestone 3 part 2, paused work by Vishwanath793 (DELL), committed exactly as left:**
+  - `src/core/backtestData.js` (the backtest planner and candle cache). It loads, and nothing imports it yet.
+  - `server/backtestData.test.js` **ends mid-test (`test('candles: one request per…`) and does not parse.** It is
+    intentionally **not** in the `npm test` script, so `npm test` and CI don't load it.
+  - Whoever resumes milestone 3 should finish that last test and add the file to the script. The *Work in
+    progress* line for it stays.
+- `docs/analyzer-review-2026-10-21.md`, `docs/analyzer-review-checks-2026-10-21.json`,
+  `docs/analyzer-review-repro.mjs`: a source-level Analyzer review written by another session, and its
+  counter-example script (made-up inputs plus local file metadata; it reads `.data/`, makes no network calls).
+  Several of its findings overlap the review in this log (coverage of sparse scores, the order buttons, the
+  upload date, the backend's single 09:10 attempt, and storage of the secret and token). It also reports that
+  Auction drift and orders-held still use readings after the matching, which is still open.
+
+**Checks:** files read in full before committing; no keys or tokens in any of them. `npm test` (237) and
+`npm run build` pass with them included.
+
 ### 2026-10-21: Analyzer: "Gap vs size" column, the gap normalised for free-float market cap (Claude Code for vinayakb374, android-app, local commit)
 **Why:** smaller companies gap more. On 21 Oct, across 2,272 NSE stocks, the median 20-session average absolute
 gap was:
