@@ -47,6 +47,7 @@ const STOCK_COLUMNS = [
   { key: 'finalPrice', label: 'Final Price', numeric: true },
   { key: 'change', label: 'Change', numeric: true },
   { key: 'pctChange', label: '%Chg', numeric: true },
+  { key: 'sizeGapX', label: 'Gap vs size', numeric: true, title: "Today's gap ÷ the typical gap for a company this size: the median 20-session average gap of the 100 stocks nearest in free-float market cap. 3× = three times normal for its size." },
   { key: 'convictionScore', label: 'Conviction', numeric: true },
   { key: 'rvolX', label: 'Signals', numeric: true },
   { key: 'bandPct', label: 'Circuit (Lower / Upper)', numeric: true },
@@ -784,6 +785,21 @@ export default function App() {
   const setFactorWeight = (key, value) => {
     const weight = cleanWeight(value);
     if (weight != null) updateFactor(key, { weight: Math.round(weight) });
+  };
+
+  // Gap ÷ the typical gap for the stock's free-float size (utils/sizeGap.js); hover for the peers used.
+  const renderSizeGap = (s) => {
+    if (s.sizeGapX == null) return <span className="hint" title={s.ffmCap == null ? 'No free-float market cap in the pre-open data.' : 'Not enough stocks with history to compare sizes.'}>—</span>;
+    const i = s.sizeGapInfo;
+    const x = s.sizeGapX;
+    const title = `${Math.abs(s.pctChange).toFixed(2)}% gap vs a typical ${s.sizeTypicalGap.toFixed(2)}% for companies this size `
+      + `(median of ${i.peers} stocks with free-float cap ${fmtCap(i.fromCap)}–${fmtCap(i.toCap)}, `
+      + `${i.source === 'history' ? '20-session average gaps from NSE end-of-day files' : "today's pre-open gaps (no history yet)"}) = ${x.toFixed(1)}× normal.`;
+    return (
+      <span className={`size-gap ${x >= 3 ? 'big' : x >= 1.5 ? 'mid' : ''} ${s.status === 'advance' ? 'adv-text' : s.status === 'decline' ? 'dec-text' : ''}`} title={title}>
+        {x >= 10 ? Math.round(x) : x.toFixed(1)}×
+      </span>
+    );
   };
 
   // Conviction score cell; hover shows each factor's contribution.
@@ -1629,6 +1645,7 @@ export default function App() {
                       <td className={`num ${s.pctChange > 0 ? 'adv-text' : s.pctChange < 0 ? 'dec-text' : ''}`}>
                         {s.pctChange ?? '—'}
                       </td>
+                      <td className="num">{renderSizeGap(s)}</td>
                       <td className="num">{renderConviction(s)}</td>
                       {showHistoryLayer && <td className="num"><HistoryScore s={s} /></td>}
                       {showAuctionLayer && <td className="num"><AuctionScore s={s} /></td>}

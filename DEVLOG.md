@@ -40,6 +40,47 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-21: Analyzer: "Gap vs size" column, the gap normalised for free-float market cap (Claude Code for vinayakb374, android-app, local commit)
+**Why:** smaller companies gap more. On 21 Oct, across 2,272 NSE stocks, the median 20-session average absolute
+gap was:
+
+| Free-float cap | Median gap |
+|---|---|
+| < ₹1,000 Cr | 0.96% |
+| ₹1,000–5,000 Cr | 0.46% |
+| ₹5,000–20,000 Cr | 0.38% |
+| ₹20,000 Cr–1 L Cr | 0.43% |
+| > ₹1 L Cr | 0.37% |
+
+It bends and then flattens. A single power law (log-log slope −0.20, R² 0.45) would misfit that, so the method
+uses size peers instead of a fitted curve.
+
+**What changed:**
+- `src/utils/sizeGap.js`:
+  - **Typical gap for this size** = the median 20-session average |gap| (NSE end-of-day files) of the
+    **100 stocks nearest in free-float cap**, compared on a log scale.
+  - The peer pool is every stock in the pre-open feed (all of NSE) with 5 or more sessions of history.
+  - **Gap vs size** = |today's gap| ÷ typical gap.
+  - Without enough history it uses today's pre-open gaps of the size peers, and labels the source.
+- Stocks table: a **Gap vs size** column after %Chg (e.g. "5.4×"). It is sortable, coloured by gap direction,
+  bold at 1.5× or more, dotted at 3× or more, and the hover shows the typical gap, the peer cap range and the
+  source.
+- Excel export: "Gap vs size (×)" and "Typical gap for size (%)".
+- Display only: not in any score.
+
+**Files:** new `src/utils/sizeGap.js`, `server/sizeGap.test.js` (added to `npm test`); `src/utils/analysis.js`,
+`src/App.jsx`, `src/utils/exportStocks.js`, `src/styles.css`.
+
+**Tests / checks:**
+- `npm test`: 237 pass. `npm run build` and `npx cap sync android` succeed.
+- Browser (21 Oct): all 750 rows filled.
+  - INFY (₹4.07 L Cr) +2.14% = **5.4×** (typical 0.40%).
+  - ICICIBANK +1.81% = 4.5×.
+  - UTLSOLAR (₹1,441 Cr) −2.33% = 5.0× (typical 0.47% for ₹1,292–1,614 Cr).
+
+**Not verified:** whether a high "gap vs size" predicts continuation or fade. Let the report card judge it before
+it goes into a score (it could become a conviction factor or a Stock filter box).
+
 ### 2026-10-21: Analyzer: market cap column filled from the NSE pre-open feed (free-float) (Claude Code for vinayakb374, android-app, local commit)
 **What changed:**
 - The stocks table's empty "Mkt Cap" column is now **"Free-float M.Cap"**. Its value is `FFM CAP (₹ Crores)` from

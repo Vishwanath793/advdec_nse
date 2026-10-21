@@ -764,3 +764,6 @@ body {
 .sf-range input { width: 56px; }
 .sf-range .sf-unit { min-width: 0; }
 .sf-warn { grid-column: 1 / -1; color: var(--amber); font-size: 0.78rem; }
+.size-gap { cursor: help; }
+.size-gap.mid { font-weight: 600; }
+.size-gap.big { font-weight: 700; text-decoration: underline dotted; }

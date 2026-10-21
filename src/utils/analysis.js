@@ -4,6 +4,7 @@ import { scoreConviction } from './conviction.js';
 import { tradeFlags } from './tradeability.js';
 import { applySignals } from './signals.js';
 import { applyResearch, applySectorResearch } from './research.js';
+import { applySizeGap } from './sizeGap.js';
 import { applyHistoryLayer } from './historyLayer.js';
 import { applyAuctionLayer, attachAuction } from './auctionLayer.js';
 
@@ -172,6 +173,7 @@ export function analyze(pmRows, masterRows, secList = null, options = {}) {
   }
   applySignals(stocks, options.context);
   applyResearch(stocks, options.context); // research columns only: not part of any score
+  applySizeGap(stocks, pmRows, options.context?.history?.stats); // gap vs the typical gap for its free-float size (display only)
   attachAuction(stocks, options.context?.auction); // Kite pre-open readings, when recorded
   for (const stock of stocks) stock.flags = tradeFlags(stock);
 
