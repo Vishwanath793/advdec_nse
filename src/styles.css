@@ -761,3 +761,6 @@ body {
 }
 .order-kite { margin-top: 4px; }
 .order-kite-btn { margin-top: 4px; padding: 2px 8px; font-size: 0.8rem; }
+.sf-range input { width: 56px; }
+.sf-range .sf-unit { min-width: 0; }
+.sf-warn { grid-column: 1 / -1; color: var(--amber); font-size: 0.78rem; }

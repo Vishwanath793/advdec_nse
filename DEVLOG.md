@@ -40,6 +40,24 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-21: Stock filter: gap size can be capped ("less than"), alone or as a range (Claude Code for vinayakb374, android-app, local commit)
+**What changed:**
+- The Gap size row has two boxes, **from** and **to** (%, either side), both optional: "to 3" keeps gaps of 3%
+  or less up or down, and "0.5 to 3" keeps gaps from 0.5% to 3%.
+- New setting `maxGap` (the minimum is still `thresholds.minGap`).
+- One chip shows the range, e.g. "Gap size 0.5–3 %".
+- A warning appears when "from" is above "to".
+- Clear all removes both.
+
+**Files:** `src/utils/screener.js`, `src/StockScreener.jsx`, `src/styles.css`, `server/screener.test.js`.
+
+**Tests / checks:**
+- `npm test`: 233 pass. `npm run build` and `npx cap sync android` succeed.
+- Browser (this folder's backend :3002, frontend :5174): with Relative volume ≥ 10, "to 2" took 30 matches to 19
+  (largest gap shown 1.97%); from 3 to 2 shows the warning and 0 matches.
+
+**Not verified:** nothing beyond the in-app browser.
+
 ### 2026-10-21: Stock filter: clearer layout (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** layout only; the filter logic and saved settings are unchanged.
 - The filters are in four cards:

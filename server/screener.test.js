@@ -91,6 +91,17 @@ test('the buy/sell orders minimum reads the gap side, the buy side or the sell s
   assert.equal(cleanScreener({ ordersSide: 'both' }).ordersSide, 'gap');
 });
 
+test('gap size can be capped (less than), alone or as a range, on either side', () => {
+  const stocks = [stock('SMALL', { pctChange: 0.6 }), stock('MID', { pctChange: 2.5 }), stock('BIG', { status: 'decline', pctChange: -6 })];
+  const names = (settings) => screenStocks(stocks, settings).matched.map((r) => r.stock.symbol).sort();
+  assert.deepEqual(names({ maxGap: 3 }), ['MID', 'SMALL']); // less than 3%, either side
+  assert.deepEqual(names({ maxGap: 3, thresholds: { minGap: 1 } }), ['MID']); // between 1% and 3%
+  assert.deepEqual(names({ maxGap: 7 }), ['BIG', 'MID', 'SMALL']); // −6% counts as a 6% gap
+  assert.match(screenStocks(stocks, { maxGap: 3 }).rows.find((r) => r.stock.symbol === 'BIG').failed.join(), /Gap size above 3/);
+  assert.equal(cleanScreener({ maxGap: '-1' }).maxGap, null);
+  assert.equal(cleanScreener({ maxGap: '2.5' }).maxGap, 2.5);
+});
+
 test('saved settings are cleaned: bad numbers dropped, defaults filled in', () => {
   const c = cleanScreener({ direction: 'sideways', maxRank: '0', thresholds: { minGap: 'abc', minRvol: '1.5' }, inRank: { rvolX: false } });
   assert.equal(c.direction, 'both');

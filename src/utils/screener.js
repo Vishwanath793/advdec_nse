@@ -41,7 +41,7 @@ export const SCREENER_LIMIT = 200;
  */
 export const SCREENER_METRICS = [
   { key: 'absGap', label: 'Gap size', short: 'Gap size', group: 'preopen', filter: 'minGap', unit: '%', step: 0.1, ranked: false,
-    help: "The pre-open gap (%CHANGE), either side: 2 keeps gap-ups of +2% or more and gap-downs of −2% or more." },
+    help: 'The pre-open gap (%CHANGE), either side. Type a minimum, a maximum or both: 0.5 to 3 keeps gaps from 0.5% to 3% up or down.' },
   { key: 'rvolX', label: 'Relative volume', short: 'Relative volume', group: 'preopen', filter: 'minRvol', unit: '× typical', step: 1, ranked: true,
     help: "Pre-open quantity vs its 20-day average daily volume, as a multiple of the typical stock: the \"Vol ×\" badge. 28 keeps Vol 28× and above." },
   { key: 'ordersPct', label: 'Buy/sell orders', short: 'Buy/sell orders', group: 'preopen', filter: 'minOrders', unit: '% of pending', step: 5, ranked: true, sided: true,
@@ -78,6 +78,7 @@ export const DEFAULT_SCREENER = {
   ordersSide: 'gap', // 'gap' | 'buy' | 'sell'
   tradeableOnly: false,
   maxRank: null,
+  maxGap: null, // gap size at most this % (either side); the minimum is thresholds.minGap
   thresholds: Object.fromEntries(SCREENER_METRICS.map((m) => [m.filter, null])),
   inRank: Object.fromEntries(SCREENER_METRICS.filter((m) => m.ranked).map((m) => [m.key, true])),
 };
@@ -92,6 +93,7 @@ export function cleanScreener(saved) {
     ordersSide: Object.hasOwn(ORDER_SIDES, s.ordersSide ?? '') ? s.ordersSide : 'gap',
     tradeableOnly: s.tradeableOnly === true,
     maxRank: num(s.maxRank) != null && num(s.maxRank) >= 1 ? Math.floor(num(s.maxRank)) : null,
+    maxGap: num(s.maxGap) != null && num(s.maxGap) >= 0 ? num(s.maxGap) : null,
     thresholds: Object.fromEntries(SCREENER_METRICS.map((m) => [m.filter, num(s.thresholds?.[m.filter])])),
     inRank: Object.fromEntries(SCREENER_METRICS.filter((m) => m.ranked).map((m) => [m.key, s.inRank?.[m.key] !== false])),
   };
@@ -185,6 +187,7 @@ export function screenStocks(stocks, settings = DEFAULT_SCREENER) {
       if (v == null) failed.push(`${m.label}: no data`);
       else if (v < min) failed.push(`${m.label} below ${min}`);
     }
+    if (cfg.maxGap != null && (r.metrics.absGap == null || r.metrics.absGap > cfg.maxGap)) failed.push(`Gap size above ${cfg.maxGap}`);
     if (cfg.maxRank != null && (r.rank == null || r.rank > cfg.maxRank)) failed.push(r.rank == null ? 'unranked' : `rank ${r.rank}`);
     r.failed = failed;
     r.pass = failed.length === 0;

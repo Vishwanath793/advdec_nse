@@ -21,8 +21,14 @@ export default function StockScreener({ stocks, settings, onChange, onTrade }) {
   const shown = result.matched.slice(0, SCREENER_LIMIT);
   const rankedLabels = SCREENER_METRICS.filter((m) => result.rankedKeys.includes(m.key)).map((m) => m.label);
 
+  const minGap = cfg.thresholds.minGap;
   const chips = [
-    ...SCREENER_METRICS.filter((m) => cfg.thresholds[m.filter] != null).map((m) => ({
+    ...(minGap != null || cfg.maxGap != null ? [{
+      key: 'gap',
+      text: minGap != null && cfg.maxGap != null ? `Gap size ${minGap}–${cfg.maxGap} %` : minGap != null ? `Gap size ≥ ${minGap} %` : `Gap size ≤ ${cfg.maxGap} %`,
+      clear: () => set({ maxGap: null, thresholds: { ...cfg.thresholds, minGap: null } }),
+    }] : []),
+    ...SCREENER_METRICS.filter((m) => m.key !== 'absGap' && cfg.thresholds[m.filter] != null).map((m) => ({
       key: m.filter,
       text: `${m.short}${m.sided && cfg.ordersSide !== 'gap' ? ` (${ORDER_SIDES[cfg.ordersSide].toLowerCase()})` : ''} ≥ ${cfg.thresholds[m.filter]} ${m.unit}`,
       clear: () => setThreshold(m.filter, ''),
@@ -32,7 +38,33 @@ export default function StockScreener({ stocks, settings, onChange, onTrade }) {
     ...(cfg.tradeableOnly ? [{ key: 'trade', text: 'Tradeable only', clear: () => set({ tradeableOnly: false }) }] : []),
   ];
 
+  const numberInput = (id, value, onValue, step, placeholder) => (
+    <input id={id} type="number" min="0" step={step} value={value ?? ''} placeholder={placeholder}
+      onChange={(e) => onValue(e.target.value === '' ? null : Number(e.target.value))} />
+  );
+
+  // Gap size is a range: from and/or to, either side of the gap.
+  const gapRow = (m) => {
+    const bad = minGap != null && cfg.maxGap != null && minGap > cfg.maxGap;
+    return (
+      <div key={m.key} className={`sf-row ${minGap != null || cfg.maxGap != null ? 'on' : ''}`}>
+        <label className="sf-label" htmlFor="sf-absGap" title={m.help}>
+          {m.short} <span className="sf-info" aria-hidden="true">ⓘ</span>
+        </label>
+        <div className="sf-value sf-range">
+          {numberInput('sf-absGap', minGap, (v) => setThreshold('minGap', v ?? ''), m.step, 'from')}
+          <span className="sf-op">to</span>
+          {numberInput('sf-maxGap', cfg.maxGap, (v) => set({ maxGap: v }), m.step, 'to')}
+          <span className="sf-unit">%</span>
+        </div>
+        <span className="sf-rank-none" title="Gap size is a filter only, not part of the rank" />
+        {bad && <span className="sf-warn">“From” is above “to”: nothing can match.</span>}
+      </div>
+    );
+  };
+
   const filterRow = (m) => {
+    if (m.key === 'absGap') return gapRow(m);
     const on = cfg.thresholds[m.filter] != null;
     return (
       <div key={m.key} className={`sf-row ${on ? 'on' : ''}`}>
