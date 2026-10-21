@@ -33,6 +33,11 @@ export function addOrderRoutes(app, scheduler, { onSession = () => {} } = {}) {
     try { await scheduler.cancel(req.params.id); res.json(await payload()); }
     catch (error) { res.status(400).json({ error: error.message }); }
   });
+  // Read Kite's own record (received, at the exchange, fills) of a placed order now.
+  app.post('/api/orders/scheduled/:id/kite', async (req, res) => {
+    try { await scheduler.refreshKite(req.params.id); res.json(await payload()); }
+    catch (error) { res.status(400).json({ error: error.message }); }
+  });
   // The Kite session for sending, held in memory only; {} clears it.
   app.put('/api/orders/session', (req, res) => {
     const { apiKey, accessToken, userId } = req.body ?? {};

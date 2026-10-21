@@ -109,6 +109,8 @@ export function createWebApi() {
       list: () => json(fetch('/api/orders/scheduled')),
       add: (order) => json(post('/api/orders/scheduled', { order })),
       cancel: (id) => json(fetch(`/api/orders/scheduled/${encodeURIComponent(id)}`, { method: 'DELETE' })),
+      /** Read Kite's record of a placed order (received, at the exchange, fills). */
+      refreshKite: (id) => json(post(`/api/orders/scheduled/${encodeURIComponent(id)}/kite`, {})),
       /** Hand the Kite session to the backend (memory only); null clears it. */
       setSession: (s) => json(post('/api/orders/session', s ?? {}, 'PUT')),
     },

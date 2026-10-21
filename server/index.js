@@ -19,6 +19,7 @@ import { kiteRoute } from './kiteRoute.js';
 import { createRecorder } from '../src/core/recorder.js';
 import { createAutoExport } from './autoExport.js';
 import { createOrderScheduler } from '../src/core/orderScheduler.js';
+import { createThreadSender } from './orderSender.js';
 import { createNseLiveService } from '../src/core/nseLive.js';
 import { createOpeningCollector } from '../src/core/openingCollector.js';
 import { createInstrumentService } from '../src/core/instruments.js';
@@ -279,6 +280,13 @@ const orderScheduler = createOrderScheduler({
   store: fsStore(fileURLToPath(new URL('../.data', import.meta.url))),
   calendar,
   placeOrder: (args) => kite.placeOrder(args),
+  // Sent from a worker thread at the exact time, away from the opening's tick flood.
+  sender: createThreadSender(),
+  // Kite's own record (received, at the exchange, fills) for each placed order.
+  orderDetails: async (args) => {
+    const [history, trades] = await Promise.all([kite.orderHistory(args), kite.orderTrades(args)]);
+    return { history, trades };
+  },
 });
 orderScheduler.load().catch((error) => console.error(`Scheduled orders: ${error.message}`));
 addOrderRoutes(app, orderScheduler, { onSession: (s) => { openingCollector.setSession(s); auctionTracker.setSession(s); } });

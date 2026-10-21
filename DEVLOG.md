@@ -40,6 +40,61 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-21: Scheduled orders: exact-second send from a worker thread, and Kite's own timeline per order (Claude Code for vinayakb374, android-app, local commit)
+**Why:** the owner's SELL 1000 JUSTDIAL at 09:15:00 left the app 523 ms late (Kite answered in 140 ms) and showed
+as executed at 09:15:02 in Kite. A 10:15:00 order on 19 Oct left 4 ms late. So at the open the backend's event loop
+is busy: the opening collector's tick flood, synchronous tick-log writes, and the order's own "placing" save were
+all ahead of it. The rest of the 2 s is Zerodha/NSE at the open. Separately, Windows time sync is off ("Local CMOS
+Clock"); it was 0.16 s off today, and the owner was told how to sync it.
+
+**What changed:**
+- **Armed 2 s early** (`PREARM_MS`). The scheduler checks the Kite session and saves "placing" at T−2 s (a crash
+  from then on never resends; on restart such an order fails with "check the Kite order book"), then hands the
+  order to a sender.
+- **Sender** (`createOrderSender` in `core/orderScheduler.js`): waits for the exact time, keeps the 120 ms spacing,
+  retries a 429 once and never resends an unknown outcome (unchanged rules). It warms the connection to Kite
+  before the time (`GET /user/profile`). Results are plain objects.
+- **Backend:** the sender runs in a **worker thread** (`server/orderSender.js` + `server/orderSenderWorker.js`)
+  with its own event loop. It sleeps until 15 ms before the time, then checks the clock continuously. If the worker
+  dies mid-send, its orders fail with "may or may not have reached Kite, check the order book" and are never
+  resent; the next order starts a new worker. **The phone** sends inline, as before.
+- **Kite timeline:** 5 s, 30 s and 2 min after placing (until final), the app reads `GET /orders/:id` (history)
+  and `GET /orders/:id/trades`. It keeps when Kite received the order, when the exchange registered it, each
+  fill, the average price and the status (`kiteTimeline`). On the Orders page this shows under each placed order,
+  with a **Read from Kite** button (route `POST /api/orders/scheduled/:id/kite`; Kite keeps the day's orders only).
+  The Kite client gained `orderHistory`, `orderTrades` and `profile`.
+
+**Files:**
+- New: `server/orderSender.js`, `server/orderSenderWorker.js`, `server/fixtures/fakeOrderWorker.js`,
+  `server/orderSender.test.js` (added to `npm test`).
+- Changed: `src/core/orderScheduler.js`, `src/core/kite.js`, `server/index.js`, `server/orderRoutes.js`,
+  `src/platform/web.js`, `src/platform/android.js`, `src/OrdersPage.jsx`, `src/styles.css`.
+
+**Tests / checks:**
+- `npm test`: 232 pass. All 17 existing scheduler tests pass unchanged. New tests cover:
+  - arming at T−2 s, and a crash after arming never resending;
+  - the warm-up, spacing and unknown-outcome rules;
+  - spin timing on real time (≤ 3 ms late);
+  - the worker thread: results, sending on time **with the main thread blocked for 600 ms across the time
+    (≤ 5 ms late)**, a dying worker, close with an order in flight;
+  - the real worker file loading without contacting Kite;
+  - the timeline and checks, and the Kite endpoints.
+- `npm run build` succeeds.
+- Browser: the Orders page renders the new details and button with no errors. The timeline layout was checked
+  with **sample data injected in the page**, not a real Kite reply.
+
+**Not verified:**
+- **Nothing ran against Kite:** the worker sending a real order, the warm-up call, and `GET /orders/:id`
+  (`/trades`) responses with real data. The field names (`order_timestamp`, `exchange_timestamp`,
+  `exchange_update_timestamp`, `fill_timestamp`) are from the Kite Connect docs.
+- The running backend on :3002 is the old copy in `C:\Users\DELL\advdec_nse`: none of this is live until a backend
+  runs from this folder.
+- Whether the warm-up connection is still open at T. Node's default keep-alive is about 4 s; the warm-up is 2 s
+  before.
+
+**Next:** run the backend from this folder; after the next scheduled order, compare "sent … ms after the time"
+with Kite's timeline.
+
 ### 2026-10-21: Stock filter: buy/sell side choice, three more auction filters; fix the auction imbalance read after matching (Claude Code for vinayakb374, android-app, local commit)
 **What changed:**
 - **Stock filter:**

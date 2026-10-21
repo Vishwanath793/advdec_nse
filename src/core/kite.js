@@ -205,5 +205,20 @@ export function createKiteClient({ fetchImpl = fetch } = {}) {
       const payload = await call('/trades', { apiKey, accessToken, failure: 'Kite trades request failed', timeoutMs });
       return Array.isArray(payload.data) ? payload.data : [];
     },
+    /** Every state an order went through, oldest first (GET /orders/:order_id). */
+    async orderHistory({ apiKey, accessToken, orderId, timeoutMs = 10_000 }) {
+      const payload = await call(`/orders/${encodeURIComponent(orderId)}`, { apiKey, accessToken, failure: 'Kite order history request failed', timeoutMs });
+      return Array.isArray(payload.data) ? payload.data : [];
+    },
+    /** The executions of one order (GET /orders/:order_id/trades). */
+    async orderTrades({ apiKey, accessToken, orderId, timeoutMs = 10_000 }) {
+      const payload = await call(`/orders/${encodeURIComponent(orderId)}/trades`, { apiKey, accessToken, failure: 'Kite order trades request failed', timeoutMs });
+      return Array.isArray(payload.data) ? payload.data : [];
+    },
+    /** The user's profile (GET /user/profile): a light call, used to open the connection before a timed order. */
+    async profile({ apiKey, accessToken, timeoutMs = 5_000 }) {
+      const payload = await call('/user/profile', { apiKey, accessToken, failure: 'Kite profile request failed', timeoutMs });
+      return payload.data ?? payload;
+    },
   };
 }

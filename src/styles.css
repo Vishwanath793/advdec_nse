@@ -724,3 +724,5 @@ body {
 .screener-input input[type='number'] { width: 100px; }
 .screener-input label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .screener-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 6px 0 10px; }
+.order-kite { margin-top: 4px; }
+.order-kite-btn { margin-top: 4px; padding: 2px 8px; font-size: 0.8rem; }

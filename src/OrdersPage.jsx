@@ -42,6 +42,24 @@ function countdown(ms) {
  * Time-triggered orders: pick a stock, Buy or Sell, quantity, Market or
  * Limit, and the second it should be sent to Kite.
  */
+/** Kite's own record of a placed order: received by Kite, at the exchange, fills (Kite's times are to the second). */
+function KiteTimeline({ k }) {
+  if (!k) return null;
+  if (k.error) return <div className="hint">Kite record: {k.error}</div>;
+  const hms = (ts) => (ts ? String(ts).slice(11, 19) : '—');
+  const fills = k.fills ?? [];
+  const fillTimes = [...new Set(fills.map((f) => hms(f.at)))];
+  return (
+    <div className="hint order-kite" title={`Read from Kite at ${new Date(k.checkedAt).toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' })} IST`}>
+      Kite: received {hms(k.receivedAt)} · at the exchange {hms(k.exchangeAt)} ·{' '}
+      {fills.length
+        ? `filled ${k.filledQuantity ?? fills.reduce((s, f) => s + f.quantity, 0)} at ${fillTimes.join(', ')}${k.averagePrice ? `, average ${rs(k.averagePrice)}` : ''} (${fills.length} trade${fills.length === 1 ? '' : 's'})`
+        : `no fills yet`}
+      {' '}· {k.status ?? 'status unknown'}{k.statusMessage ? ` (${k.statusMessage})` : ''}
+    </div>
+  );
+}
+
 export default function OrdersPage({ stocks, settings, session, draft, onDraftUsed, onShareSession, sessionShareError }) {
   const lastShareRetry = useRef(0);
   const [now, setNow] = useState(() => new Date());
@@ -144,6 +162,15 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
     if (!window.confirm(`Cancel ${o.side} ${o.quantity} ${o.symbol} at ${timeOnly(new Date(o.triggerAt))}?`)) return;
     try {
       const r = await api.scheduledOrders.cancel(o.id);
+      setOrders(r.orders ?? []);
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  const refreshKite = async (o) => {
+    try {
+      const r = await api.scheduledOrders.refreshKite(o.id);
       setOrders(r.orders ?? []);
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
@@ -299,9 +326,17 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
                   </td>
                   <td><span className={`badge ${STATUS_CLASS[o.status]}`}>{o.status}</span></td>
                   <td className="wrap-cell order-detail">
-                    {o.status === 'placed'
-                      ? `Kite order ${o.result?.orderId ?? '—'}: sent ${o.result?.sendDelayMs ?? '?'} ms after the time, Kite confirmed in ${o.result?.kiteMs ?? '?'} ms${o.result?.attempts > 1 ? ' (retried once after a rate limit)' : ''}. Check fills in Kite.`
-                      : o.result?.error ?? (o.status === 'cancelled' ? 'Cancelled before its time.' : '')}
+                    {o.status === 'placed' ? (
+                      <>
+                        {`Kite order ${o.result?.orderId ?? '—'}: sent ${o.result?.sendDelayMs ?? '?'} ms after the time, Kite confirmed in ${o.result?.kiteMs ?? '?'} ms${o.result?.attempts > 1 ? ' (retried once after a rate limit)' : ''}.`}
+                        <KiteTimeline k={o.result?.kite} />
+                        {o.result?.orderId && api.scheduledOrders.refreshKite && (
+                          <button type="button" className="btn ghost order-kite-btn" onClick={() => refreshKite(o)} title="Read this order's history and fills from Kite (Kite keeps the day's orders only)">
+                            {o.result?.kite ? 'Read again from Kite' : 'Read from Kite'}
+                          </button>
+                        )}
+                      </>
+                    ) : o.result?.error ?? (o.status === 'cancelled' ? 'Cancelled before its time.' : '')}
                   </td>
                 </tr>
               ))}

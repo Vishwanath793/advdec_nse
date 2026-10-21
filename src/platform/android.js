@@ -125,7 +125,14 @@ export function createAndroidApi() {
   });
   const preopen = createPhonePreopen({ store, fetchImpl, calendar, notifier, onSnapshot: (s) => recorder.record(s) });
   const kite = createKiteClient({ fetchImpl });
-  const orderScheduler = createOrderScheduler({ store, calendar, placeOrder: (args) => kite.placeOrder(args) });
+  const orderScheduler = createOrderScheduler({
+    store, calendar, placeOrder: (args) => kite.placeOrder(args),
+    // Kite's own record (received, at the exchange, fills) for each placed order.
+    orderDetails: async (args) => {
+      const [history, trades] = await Promise.all([kite.orderHistory(args), kite.orderTrades(args)]);
+      return { history, trades };
+    },
+  });
   orderScheduler.load().catch(() => {});
   preopen.snapshot().then((s) => s && recorder.record(s)).catch(() => {});
 
@@ -196,6 +203,10 @@ export function createAndroidApi() {
       },
       async cancel(id) {
         await orderScheduler.cancel(id);
+        return { orders: await orderScheduler.list(), session: orderScheduler.sessionStatus() };
+      },
+      async refreshKite(id) {
+        await orderScheduler.refreshKite(id);
         return { orders: await orderScheduler.list(), session: orderScheduler.sessionStatus() };
       },
       setSession: async (s) => orderScheduler.setSession(s),
