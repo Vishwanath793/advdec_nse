@@ -715,3 +715,12 @@ body {
   .trading-stats { gap: 6px 14px; font-size: 0.82rem; }
   .reasons-cell { max-width: 140px; }
 }
+
+/* Analyzer stock filter (replaced the Sector Bias spotlight) */
+.screener-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px 16px; margin: 10px 0; }
+.screener-filter { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
+.screener-filter.screener-check { flex-direction: row; align-items: center; gap: 6px; }
+.screener-input { display: flex; align-items: center; gap: 8px; }
+.screener-input input[type='number'] { width: 100px; }
+.screener-input label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.screener-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 6px 0 10px; }

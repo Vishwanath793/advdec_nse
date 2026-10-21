@@ -40,6 +40,49 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-21: Analyzer: Stock filter with a quality rank replaces "Sector Bias" (Claude Code for vinayakb374, android-app, local commit)
+**What changed:**
+- The **Sector Bias (breadth > 65%)** section is removed, along with its `bias` calculation in `App.jsx`. The
+  `bias-*` CSS stays because Top movers still uses it.
+- The new **Stock filter** section lists every gapped stock with these readings:
+  - Gap size (absolute, either side)
+  - Relative volume (`rvolX`)
+  - Gap-side buy/sell orders (%)
+  - Pre-open value percentile ("higher than x% of stocks")
+  - Delivery % (yesterday)
+  - Delivery quantity surge (`delivQtyX`)
+  - Gap built during the auction: the indicative gap's change from 09:04 to the end of order entry, in the gap
+    direction, from the Kite pre-open readings
+- **Every threshold is typed in by hand.** A blank box is not applied. A stock without the reading fails that
+  box. There are also Direction (both / up / down) and Tradeable only.
+- **Quality rank:** the average percentile, among all gapped stocks, of the readings ticked "in rank" (needs 3 or
+  more). Rank 1 is the best. The rank is computed before the thresholds, so it stays the same as filters change.
+  "Quality rank ≤ N" filters on it.
+- Filters are saved per browser (`settings.screener`).
+- Results show tradeability flags, the quality coverage (e.g. "3/6"), conviction, and the same BUY/SELL buttons
+  the old section had (they place the order straight away, as before).
+- Pure logic is in `src/utils/screener.js`; the UI is `src/StockScreener.jsx`.
+
+**Files:**
+- New: `src/utils/screener.js`, `src/StockScreener.jsx`, `server/screener.test.js` (added to `npm test`).
+- Changed: `src/App.jsx`, `src/styles.css`, `package.json`.
+
+**Tests / checks:**
+- `npm test`: 220 pass. `npm run build` and `npx cap sync android` succeed.
+- Browser, with this folder's frontend on :5174 against the backend already running on :3002, using the real
+  21 Oct pre-open and auction readings: 632 gapped stocks, all 632 ranked. Typing thresholds narrowed the list
+  632 → 81 → 22 → 14 → 6 → 4, and the values were saved.
+
+**Not verified / notes:**
+- The quality rank is a hypothesis, not a measured edge. Circuit-locked or T2T stocks can rank high (e.g. E2E on
+  21 Oct), so use "Tradeable only" or check the flags.
+- The backend on :3002 gave history `asOf` 2026-10-19 for 21 Oct, so 20 Oct's end-of-day file wasn't cached
+  there. That is not caused by this change.
+- Sync note: before this work the shared folder was fast-forwarded to origin/android-app plus the unpushed
+  commit `b18cac6` from `C:\Users\DELL\advdec_nse`. Nothing was pushed.
+
+**Next:** have the report card measure whether the top-ranked stocks beat the rest.
+
 ### 2026-10-20: Conviction factors reach the backend only when changed (Claude Code for vinayakb374, android-app, local commit)
 **What changed:**
 - Before this fix, every browser that opened the Analyzer sent its own saved conviction factors to the backend

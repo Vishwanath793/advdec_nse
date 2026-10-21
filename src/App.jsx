@@ -26,6 +26,7 @@ import ReportCardPage from './ReportCardPage.jsx';
 import ConfirmPage from './ConfirmPage.jsx';
 import OrdersPage from './OrdersPage.jsx';
 import { ModeBadge } from './TradingPanel.jsx';
+import StockScreener from './StockScreener.jsx';
 import { MarketResearch, RESEARCH_COLUMNS, ResearchCells, SectorBreadthCell } from './ResearchColumns.jsx';
 import { HISTORY_COLUMN, HistoryScore } from './HistoryLayer.jsx';
 import { HISTORY_FACTORS, HISTORY_GROUP } from './utils/historyLayer.js';
@@ -494,36 +495,6 @@ export default function App() {
   const { summary } = result ?? {};
   const advPct = summary && summary.total ? (summary.advances / summary.total) * 100 : 0;
   const decPct = summary && summary.total ? (summary.declines / summary.total) * 100 : 0;
-
-  // Sector bias: a sector qualifies when its advance share > 65% (bullish) or its
-  // decline share > 65% (bearish). For each qualifying sector, list the 3 lowest
-  // FFM-cap stocks on the dominant side. Strongest-bias sectors first.
-  const bias = useMemo(() => {
-    if (!result || !summary || summary.total === 0) return null;
-    const capAsc = (a, b) => (a.ffmCap ?? Infinity) - (b.ffmCap ?? Infinity);
-
-    const sectors = result.sectors
-      .map((s) => {
-        const advShare = s.total ? s.advances / s.total : 0;
-        const decShare = s.total ? s.declines / s.total : 0;
-        const mode = advShare > 0.65 ? 'advance' : decShare > 0.65 ? 'decline' : null;
-        if (!mode) return null;
-        return {
-          ...s,
-          mode,
-          share: mode === 'advance' ? advShare : decShare,
-          stocks: result.stocks
-            .filter((st) => st.sector === s.sector && st.status === mode)
-            .sort(capAsc)
-            .slice(0, 3),
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.share - a.share || b.total - a.total);
-
-    return { advanceSectors: sectors.filter((s) => s.mode === 'advance'),
-             declineSectors: sectors.filter((s) => s.mode === 'decline') };
-  }, [result, summary]);
 
   // Top 5 gainers / losers by %change among stocks at or above the market-cap floor.
   const topMovers = useMemo(() => {
@@ -1713,77 +1684,13 @@ export default function App() {
             </p>
           </section>
 
-          {/* Sector bias spotlight */}
-          {bias && (bias.advanceSectors.length > 0 || bias.declineSectors.length > 0) && (
-            <section>
-              <h2>Sector Bias (breadth &gt; 65%)</h2>
-              <p className="hint">
-                Sectors where more than 65% of stocks move one way — 3 lowest FFM-cap
-                stocks from the dominant side, strongest bias first.
-              </p>
-              {[
-                { label: 'Advance-dominated ▲', list: bias.advanceSectors, mode: 'advance' },
-                { label: 'Decline-dominated ▼', list: bias.declineSectors, mode: 'decline' },
-              ].map(
-                ({ label, list, mode }) =>
-                  list.length > 0 && (
-                    <details key={mode} className={`bias-group accordion ${mode}`}>
-                      <summary className={mode === 'advance' ? 'adv-text' : 'dec-text'}>
-                        {label} ({list.length})
-                      </summary>
-                      <div className="bias-grid">
-                        {list.map((s) => (
-                          <div key={s.sector} className={`bias-card ${mode}`}>
-                            <div className="bias-head">
-                              <strong>{s.sector}</strong>
-                              <span className={`badge ${mode}`}>
-                                {mode === 'advance'
-                                  ? `${s.advances}/${s.total} adv`
-                                  : `${s.declines}/${s.total} dec`}
-                              </span>
-                            </div>
-                            <table className="bias-table">
-                              <thead>
-                                <tr>
-                                  <th>Symbol</th>
-                                  <th className="num">%Chg</th>
-                                  <th className="num">FFM Cap</th>
-                                  <th className="num">Action</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {s.stocks.map((st) => (
-                                  <tr key={st.symbol}>
-                                    <td className="mono">{st.symbol}</td>
-                                    <td
-                                      className={`num ${mode === 'advance' ? 'adv-text' : 'dec-text'}`}
-                                    >
-                                      {st.pctChange ?? '—'}
-                                    </td>
-                                    <td className="num">{fmtCap(st.ffmCap)}</td>
-                                    <td className="num">
-                                      <button
-                                        className={`btn trade ${mode === 'advance' ? 'buy' : 'sell'}`}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleTradeAction(st, mode === 'advance' ? 'BUY' : 'SELL');
-                                        }}
-                                      >
-                                        {mode === 'advance' ? 'BUY' : 'SELL'}
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        ))}
-                      </div>
-                    </details>
-                  )
-              )}
-            </section>
-          )}
+          {/* Stock filter (replaced the "Sector Bias" spotlight) */}
+          <StockScreener
+            stocks={result.stocks}
+            settings={settings.screener}
+            onChange={(screener) => updateSetting({ screener })}
+            onTrade={handleTradeAction}
+          />
 
           {/* Sector-wise table */}
           <section>
