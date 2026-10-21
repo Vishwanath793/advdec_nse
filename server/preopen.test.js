@@ -36,6 +36,9 @@ test('NSE mapping matches CSV units and feeds the analyzer', () => {
   assert.equal(result.stocks[0].pctChange, -1.43);
   assert.equal(result.stocks[0].valueCr.toFixed(2), '62.71');
   assert.equal(result.stocks[0].ffmCap.toFixed(2), '1045248.95');
+  // The master list here has no market cap, but the feed's free-float cap is there for the table and top movers.
+  assert.equal(result.hasMarketCap, false);
+  assert.equal(result.hasFreeFloatCap, true);
   assert.equal(marketUpdatedAt, '11-Sep-2026 09:08:47');
   assert.throws(() => normalizePreopen({ data: [] }), /no pre-open data/);
   assert.throws(() => normalizePreopen({ data: [{ symbol: 'X' }] }), /usable stock prices/);

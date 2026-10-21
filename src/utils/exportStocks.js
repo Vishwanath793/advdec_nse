@@ -149,7 +149,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
   const shares = weightShares(weights);
 
   const header = [
-    'Symbol', 'Company', 'Sector', 'Market cap (₹ Cr)', 'Prev close', 'Final price', 'Change', '% change', 'Status',
+    'Symbol', 'Company', 'Sector', 'Free-float market cap (₹ Cr)', 'Market cap (₹ Cr)', 'Prev close', 'Final price', 'Change', '% change', 'Status',
     'Pre-open value (₹ Cr)', 'Conviction', 'History score', 'History factors (0–100)', 'Auction score', 'Auction factors (0–100)', 'Direction', 'Score before cap', 'Capped by', 'Flags', 'Signals',
     'Lower circuit', 'Upper circuit', 'Band',
     ...RESEARCH_HEADERS,
@@ -160,7 +160,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
     const c = s.conviction;
     const used = new Map((c?.factors ?? []).map((f) => [f.key, f]));
     return [
-      s.symbol, s.company, s.sector, round(s.marketCap), s.prevClose, s.finalPrice, s.change, s.pctChange,
+      s.symbol, s.company, s.sector, round(s.ffmCap), round(s.marketCap), s.prevClose, s.finalPrice, s.change, s.pctChange,
       s.status === 'advance' ? 'Advance' : s.status === 'decline' ? 'Decline' : 'Unchanged',
       round(s.valueCr, 4),
       c?.score ?? null,
@@ -219,7 +219,7 @@ export function stocksWorkbook(stocks, factorSettings, meta = {}) {
     {
       name: 'Stocks',
       rows: [header, ...rows],
-      widths: [14, 30, 24, 14, 11, 11, 9, 9, 11, 13, 11, 11, 40, 10, 11, 14, 18, 26, 12, 12, 16,
+      widths: [14, 30, 24, 14, 14, 11, 11, 9, 9, 11, 13, 11, 11, 40, 10, 11, 14, 18, 26, 12, 12, 16,
         ...RESEARCH_HEADERS.map(() => 13),
         ...CONVICTION_FACTORS.flatMap(() => [12, 11]), 30],
     },

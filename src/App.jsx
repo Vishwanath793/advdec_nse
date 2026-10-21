@@ -42,7 +42,7 @@ const STOCK_COLUMNS = [
   { key: 'symbol', label: 'Symbol' },
   { key: 'company', label: 'Company' },
   { key: 'sector', label: 'Sector' },
-  { key: 'marketCap', label: 'Mkt Cap', numeric: true },
+  { key: 'ffmCap', label: 'Free-float M.Cap', numeric: true, title: 'Free-float market cap (₹ Cr) from the NSE pre-open feed: the value of the shares available to trade (promoter and locked-in holdings excluded)' },
   { key: 'prevClose', label: 'Prev Close', numeric: true },
   { key: 'finalPrice', label: 'Final Price', numeric: true },
   { key: 'change', label: 'Change', numeric: true },
@@ -496,12 +496,12 @@ export default function App() {
   const advPct = summary && summary.total ? (summary.advances / summary.total) * 100 : 0;
   const decPct = summary && summary.total ? (summary.declines / summary.total) * 100 : 0;
 
-  // Top 5 gainers / losers by %change among stocks at or above the market-cap floor.
+  // Top 5 gainers / losers by %change among stocks at or above the free-float market-cap floor (NSE pre-open feed).
   const topMovers = useMemo(() => {
     if (!result) return null;
     const floor = Number(settings.minMarketCapCr) || 0;
     const sized = result.stocks.filter(
-      (s) => s.marketCap != null && s.marketCap >= floor && s.pctChange != null
+      (s) => s.ffmCap != null && s.ffmCap >= floor && s.pctChange != null
     );
     const eligible = settings.tradeableOnly ? sized.filter(isTradeable) : sized;
     const byConviction = settings.moversRankBy === 'conviction';
@@ -1399,7 +1399,7 @@ export default function App() {
               <div className="section-head">
                 <h2>Top 5 Gainers &amp; Losers</h2>
                 <label className="cap-filter">
-                  Market cap ≥ ₹
+                  Free-float market cap ≥ ₹
                   <input
                     type="number"
                     min="0"
@@ -1428,14 +1428,15 @@ export default function App() {
                   Tradeable only
                 </label>
               </div>
-              {!result.hasMarketCap ? (
+              {!result.hasFreeFloatCap ? (
                 <div className="alert warn">
-                  The current master list has no market-cap column. Upload a list with a "Market Cap (Cr)" column to see top movers.
+                  This pre-open data has no free-float market cap (FFM CAP) column, so top movers can&apos;t be filtered by size.
+                  The NSE pre-open feed includes it; an uploaded pm.csv may not.
                 </div>
               ) : (
                 <>
                   <p className="hint">
-                    {topMovers.eligible.toLocaleString()} stocks meet the market-cap filter
+                    {topMovers.eligible.toLocaleString()} stocks meet the free-float market-cap filter
                     {topMovers.hidden > 0 && ` (${topMovers.hidden} untradeable hidden)`}. Ranked by{' '}
                     {settings.moversRankBy === 'conviction' ? 'conviction score (hover a score for its breakdown)' : 'pre-open %change'}.
                   </p>
@@ -1457,7 +1458,7 @@ export default function App() {
                                 <th>#</th>
                                 <th>Symbol</th>
                                 <th>Sector</th>
-                                <th className="num">Mkt Cap</th>
+                                <th className="num" title="Free-float market cap from the NSE pre-open feed">Free-float M.Cap</th>
                                 <th className="num">Price</th>
                                 <th className="num">%Chg</th>
                                 <th className="num">Conviction</th>
@@ -1475,7 +1476,7 @@ export default function App() {
                                     {renderSignals(st, true)}
                                   </td>
                                   <td>{st.sector}</td>
-                                  <td className="num">{fmtCap(st.marketCap)}</td>
+                                  <td className="num">{fmtCap(st.ffmCap)}</td>
                                   <td className="num">{st.finalPrice ?? '—'}</td>
                                   <td className={`num ${mode === 'advance' ? 'adv-text' : 'dec-text'}`}>
                                     {st.pctChange.toFixed(2)}%
@@ -1619,7 +1620,7 @@ export default function App() {
                       </td>
                       <td className="wrap-cell company-cell">{s.company}</td>
                       <td className="wrap-cell sector-cell">{s.sector}</td>
-                      <td className="num">{fmtCap(s.marketCap)}</td>
+                      <td className="num">{fmtCap(s.ffmCap)}</td>
                       <td className="num">{s.prevClose ?? '—'}</td>
                       <td className="num">{s.finalPrice ?? '—'}</td>
                       <td className={`num ${s.change > 0 ? 'adv-text' : s.change < 0 ? 'dec-text' : ''}`}>

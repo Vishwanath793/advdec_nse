@@ -40,6 +40,29 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-21: Analyzer: market cap column filled from the NSE pre-open feed (free-float) (Claude Code for vinayakb374, android-app, local commit)
+**What changed:**
+- The stocks table's empty "Mkt Cap" column is now **"Free-float M.Cap"**. Its value is `FFM CAP (₹ Crores)` from
+  the NSE pre-open feed (`ffmMarketCap`), which every pre-open row already had. Before, the app read market cap
+  only from the master list, and the bundled list has none.
+- **Top 5 Gainers & Losers** now filters on the free-float cap ("Free-float market cap ≥ ₹ … Cr"), so the section
+  works with the bundled master list. On 21 Oct, 461 stocks met the ₹5,000 Cr default.
+- Excel export: a new "Free-float market cap (₹ Cr)" column. "Market cap (₹ Cr)" from an uploaded master list
+  is kept.
+- `analyze()` now also returns `hasFreeFloatCap`.
+
+**Files:** `src/App.jsx`, `src/utils/analysis.js`, `src/utils/exportStocks.js`, `src/store.js` (comment),
+`server/export.test.js`, `server/preopen.test.js`.
+
+**Tests / checks:**
+- `npm test`: 233 pass. `npm run build` and `npx cap sync android` succeed.
+- Browser (21 Oct snapshot): all 750 rows have a value (e.g. HDFCBANK ₹10.85 L Cr), and top movers list again.
+
+**Not verified / notes:**
+- Free-float cap is smaller than full market cap for promoter-held companies, so the same ₹ floor now keeps fewer
+  of them than a full-cap filter would.
+- An uploaded pm.csv without an FFM CAP column shows "—" and a note in top movers.
+
 ### 2026-10-21: Stock filter: gap size can be capped ("less than"), alone or as a range (Claude Code for vinayakb374, android-app, local commit)
 **What changed:**
 - The Gap size row has two boxes, **from** and **to** (%, either side), both optional: "to 3" keeps gaps of 3%

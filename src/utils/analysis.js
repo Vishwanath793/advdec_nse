@@ -188,5 +188,7 @@ export function analyze(pmRows, masterRows, secList = null, options = {}) {
     sectors,
     stocks,
     hasMarketCap: Boolean(capKey),
+    // Free-float market cap comes with every NSE pre-open row (FFM CAP), whatever the master list has.
+    hasFreeFloatCap: stocks.some((s) => s.ffmCap != null),
   };
 }

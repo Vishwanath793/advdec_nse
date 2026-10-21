@@ -19,7 +19,7 @@ const row = (SYMBOL, pct, extra = {}) => ({
   SYMBOL, SERIES: 'EQ', 'PREV. CLOSE': 100, 'BASE PRICE': 100, 'FINAL PRICE': 100 + pct, CHANGE: pct, '%CHANGE': pct,
   'VALUE (₹ Crores)': 5, 'TOTAL BUY QTY': 700, 'TOTAL SELL QTY': 300, ...extra,
 });
-const rows = [row('AAA', 1.5), row('BBB', -1.2), row('CCC', 0.1)];
+const rows = [row('AAA', 1.5, { 'FFM CAP (₹ Crores)': 8500.25 }), row('BBB', -1.2), row('CCC', 0.1)];
 const secList = { bands: { AAA: 'none', BBB: 20, CCC: 20 }, info: {} };
 
 const sheets = (bytes) => {
@@ -64,7 +64,9 @@ test('stocks workbook carries each factor score and the weight it counted with',
   const aaa = table[1];
   assert.equal(aaa[col('Symbol')], 'AAA');
   assert.equal(aaa[col('Company')], 'A &amp; Sons &lt;Ltd&gt;');
-  assert.equal(aaa[col('Market cap (₹ Cr)')], '12000');
+  assert.equal(aaa[col('Market cap (₹ Cr)')], '12000'); // from the master list
+  assert.equal(aaa[col('Free-float market cap (₹ Cr)')], '8500.25'); // from the NSE pre-open feed (FFM CAP)
+  assert.equal(table[2][col('Free-float market cap (₹ Cr)')], undefined); // not in the feed: empty cell
   assert.equal(aaa[col('Conviction')], String(stocks[0].convictionScore));
   assert.equal(aaa[col('Gap size weight')], '30');
   assert.equal(aaa[col('Buy/sell orders weight')], '5'); // F&O: a quarter of 20

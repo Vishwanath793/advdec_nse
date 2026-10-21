@@ -29,7 +29,7 @@ export const DEFAULT_SETTINGS = {
   minPctChangeForBuy: 1.0,  // stock %chg >= this => BUY candidate
   maxPctChangeForSell: -1.0, // stock %chg <= this => SELL candidate
   minValueCrores: 1,        // liquidity filter (pm.csv VALUE ₹ Cr)
-  minMarketCapCr: 5000,     // top gainers/losers: market cap (master list) >= this ₹ Cr
+  minMarketCapCr: 5000,     // top gainers/losers: free-float market cap (NSE pre-open FFM CAP) >= this ₹ Cr
   moversRankBy: 'pctChange', // top gainers/losers ranking: 'pctChange' | 'conviction'
   tradeableOnly: true,       // top gainers/losers: hide T2T series and circuit-locked stocks
   convictionFactors: DEFAULT_FACTOR_SETTINGS, // { key: { on, weight } } for the conviction score
