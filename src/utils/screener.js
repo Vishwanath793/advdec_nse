@@ -35,21 +35,42 @@ import { auctionImbalance } from './auctionLayer.js';
 export const MIN_QUALITY_METRICS = 3;
 export const SCREENER_LIMIT = 200;
 
+/**
+ * The readings and their typed minimums. `group` and `short` lay out the filter
+ * panel; `unit` follows the box; `help` is the full explanation (shown on hover).
+ */
 export const SCREENER_METRICS = [
-  { key: 'absGap', label: 'Gap size', filter: 'minGap', filterLabel: 'Gap size ≥ (%, either side)', unit: '%', step: 0.1, ranked: false },
-  { key: 'rvolX', label: 'Relative volume', filter: 'minRvol', filterLabel: 'Relative volume ≥ (Vol ×, times the typical stock)', unit: '×', step: 1, ranked: true },
-  { key: 'ordersPct', label: 'Buy/sell orders', filter: 'minOrders', filterLabel: 'Buy/sell orders ≥ (% of pending pre-open quantity)', unit: '%', step: 5, ranked: true, sided: true },
-  { key: 'valuePct', label: 'Pre-open value', filter: 'minValuePct', filterLabel: 'Pre-open value higher than (% of stocks)', unit: '%', step: 5, ranked: true },
-  { key: 'delivPct', label: 'Delivery % (yesterday)', filter: 'minDeliv', filterLabel: 'Delivery % yesterday ≥', unit: '%', step: 5, ranked: true },
-  { key: 'delivQtyX', label: 'Delivery quantity surge', filter: 'minDelivQtyX', filterLabel: 'Delivery quantity surge ≥ (× its usual)', unit: '×', step: 0.5, ranked: true },
-  { key: 'driftPts', label: 'Gap built during the auction', filter: 'minDrift', filterLabel: 'Gap built during the auction ≥ (points)', unit: 'pts', step: 0.1, ranked: true },
-  { key: 'heldPts', label: 'Gap-side orders held', filter: 'minHeld', filterLabel: 'Gap-side orders held ≥ (points vs the auction average)', unit: 'pts', step: 1, ranked: true },
-  { key: 'imbalanceX', label: 'Unmatched auction demand', filter: 'minImbalance', filterLabel: 'Unmatched auction demand ≥ (× matched volume, gap side)', unit: '×', step: 0.1, ranked: true },
-  { key: 'futuresPts', label: 'Futures auction vs cash', filter: 'minFutures', filterLabel: 'Futures auction vs cash ≥ (points, F&O only)', unit: 'pts', step: 0.1, ranked: true },
+  { key: 'absGap', label: 'Gap size', short: 'Gap size', group: 'preopen', filter: 'minGap', unit: '%', step: 0.1, ranked: false,
+    help: "The pre-open gap (%CHANGE), either side: 2 keeps gap-ups of +2% or more and gap-downs of −2% or more." },
+  { key: 'rvolX', label: 'Relative volume', short: 'Relative volume', group: 'preopen', filter: 'minRvol', unit: '× typical', step: 1, ranked: true,
+    help: "Pre-open quantity vs its 20-day average daily volume, as a multiple of the typical stock: the \"Vol ×\" badge. 28 keeps Vol 28× and above." },
+  { key: 'ordersPct', label: 'Buy/sell orders', short: 'Buy/sell orders', group: 'preopen', filter: 'minOrders', unit: '% of pending', step: 5, ranked: true, sided: true,
+    help: 'Share of pending pre-open buy + sell quantity on the chosen side. The rank always uses the gap side.' },
+  { key: 'valuePct', label: 'Pre-open value', short: 'Pre-open value', group: 'preopen', filter: 'minValuePct', unit: '% beaten', step: 5, ranked: true,
+    help: 'Pre-open traded value higher than this % of all stocks: 90 keeps the top 10% by value.' },
+  { key: 'delivPct', label: 'Delivery % (yesterday)', short: 'Delivery %', group: 'history', filter: 'minDeliv', unit: '%', step: 5, ranked: true,
+    help: "Yesterday's delivery % (NSE end-of-day file)." },
+  { key: 'delivQtyX', label: 'Delivery quantity surge', short: 'Delivery qty surge', group: 'history', filter: 'minDelivQtyX', unit: '× usual', step: 0.5, ranked: true,
+    help: "Yesterday's delivered shares ÷ its average over the 20 sessions before." },
+  { key: 'driftPts', label: 'Gap built during the auction', short: 'Gap built', group: 'auction', filter: 'minDrift', unit: 'pts', step: 0.1, ranked: true,
+    help: 'How much the indicative gap grew from 09:04 to the end of order entry, in the gap direction (points).' },
+  { key: 'heldPts', label: 'Gap-side orders held', short: 'Orders held', group: 'auction', filter: 'minHeld', unit: 'pts', step: 1, ranked: true,
+    help: 'Gap-side share of pending orders at the end of order entry minus its average through the auction (points): positive = added late, negative = pulled late.' },
+  { key: 'imbalanceX', label: 'Unmatched auction demand', short: 'Unmatched demand', group: 'auction', filter: 'minImbalance', unit: '× matched', step: 0.1, ranked: true,
+    help: "Kite's unmatched quantity at the close of order entry ÷ the matched volume; positive when the unmatched side is the gap side." },
+  { key: 'futuresPts', label: 'Futures auction vs cash', short: 'Futures vs cash', group: 'auction', filter: 'minFutures', unit: 'pts', step: 0.1, ranked: true,
+    help: "F&O stocks: the near-month future's pre-open gap minus the stock's, in the gap direction (points)." },
+];
+
+/** Filter panel groups, in order. */
+export const SCREENER_GROUPS = [
+  { key: 'preopen', label: 'Pre-open', source: 'NSE, 09:08' },
+  { key: 'history', label: 'Yesterday', source: 'NSE end-of-day' },
+  { key: 'auction', label: 'Auction', source: 'Kite, 09:00–09:08' },
 ];
 
 /** Which side the buy/sell orders threshold reads. */
-export const ORDER_SIDES = { gap: 'Gap side (buy for gap-ups, sell for gap-downs)', buy: 'Buy side', sell: 'Sell side' };
+export const ORDER_SIDES = { gap: 'Gap side', buy: 'Buy', sell: 'Sell' };
 
 /** Default filter settings: no thresholds, both directions, every reading in the rank. */
 export const DEFAULT_SCREENER = {

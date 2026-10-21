@@ -40,6 +40,37 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-21: Stock filter: clearer layout (Claude Code for vinayakb374, android-app, local commit)
+**What changed:** layout only; the filter logic and saved settings are unchanged.
+- The filters are in four cards:
+  - **Pre-open** (NSE 09:08)
+  - **Yesterday** (NSE end-of-day)
+  - **Auction** (Kite 09:00–09:08)
+  - **Result** (direction, top N by quality, tradeable only)
+- Each filter is one aligned row: a short label (the full explanation on hover, ⓘ), "≥", the number box with its
+  unit after it, and a ★ toggle for "counts in the quality rank".
+- A row with a value is highlighted.
+- The order side (Gap side / Buy / Sell) and the direction (Both / Gap-ups / Gap-downs) are button groups instead
+  of white native drop-downs.
+- The count is in the header ("N of M gapped stocks match").
+- Each active filter is a chip with × to remove it, plus Clear all (it keeps the ★ choices and the order side).
+- The long explanation is folded into "How the filter and the quality rank work".
+- At phone width the cards stack, with no sideways scroll.
+- `SCREENER_METRICS` gained `group`, `short` and `help`; `SCREENER_GROUPS` was added; `filterLabel` was removed.
+
+**Files:** `src/StockScreener.jsx`, `src/utils/screener.js`, `src/styles.css`.
+
+**Tests / checks:**
+- `npm test`: 232 pass. `npm run build` and `npx cap sync android` succeed.
+- Browser on :5174 against this folder's backend on :3002: desktop and 375 px; filters, chips and their × work;
+  labels no longer cut off.
+
+**Not verified:** nothing functional changed; the layout was checked only in the in-app browser.
+
+**Note:** the other chat's servers (:5173 and :3002, from `C:\Users\DELL\advdec_nse`) had stopped. This chat
+started this folder's backend on :3002 (`npm run server` with PORT=3002) and its frontend on :5174, at 17:21
+after market hours.
+
 ### 2026-10-21: Scheduled orders: exact-second send from a worker thread, and Kite's own timeline per order (Claude Code for vinayakb374, android-app, local commit)
 **Why:** the owner's SELL 1000 JUSTDIAL at 09:15:00 left the app 523 ms late (Kite answered in 140 ms) and showed
 as executed at 09:15:02 in Kite. A 10:15:00 order on 19 Oct left 4 ms late. So at the open the backend's event loop

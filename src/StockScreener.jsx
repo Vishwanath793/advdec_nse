@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { cleanScreener, MIN_QUALITY_METRICS, ORDER_SIDES, SCREENER_LIMIT, SCREENER_METRICS, screenStocks } from './utils/screener.js';
+import { cleanScreener, MIN_QUALITY_METRICS, ORDER_SIDES, SCREENER_GROUPS, SCREENER_LIMIT, SCREENER_METRICS, screenStocks } from './utils/screener.js';
 
 /**
  * Analyzer: the stock filter (replaces the old "Sector Bias" spotlight). Every
@@ -18,85 +18,142 @@ export default function StockScreener({ stocks, settings, onChange, onTrade }) {
   const result = useMemo(() => screenStocks(stocks, cfg), [stocks, JSON.stringify(cfg)]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (patch) => onChange({ ...cfg, ...patch });
   const setThreshold = (key, value) => set({ thresholds: { ...cfg.thresholds, [key]: value === '' ? null : Number(value) } });
-  const active = SCREENER_METRICS.filter((m) => cfg.thresholds[m.filter] != null).length + (cfg.maxRank != null ? 1 : 0)
-    + (cfg.direction !== 'both' ? 1 : 0) + (cfg.tradeableOnly ? 1 : 0);
   const shown = result.matched.slice(0, SCREENER_LIMIT);
   const rankedLabels = SCREENER_METRICS.filter((m) => result.rankedKeys.includes(m.key)).map((m) => m.label);
 
-  return (
-    <section className="stock-screener">
-      <h2>Stock filter</h2>
-      <p className="hint">
-        Type a minimum in any box (blank = not applied). A stock without the reading fails that box. Quality is the
-        average percentile, among all {result.gapped} gapped stocks, of the readings ticked “in rank”
-        ({rankedLabels.join(', ') || 'none'}; at least {MIN_QUALITY_METRICS} needed); rank 1 is the best. It ranks
-        setups — it does not predict the open.
-      </p>
-      <div className="screener-filters">
-        {SCREENER_METRICS.map((m) => (
-          <label key={m.key} className="screener-filter">
-            <span>{m.filterLabel}</span>
-            <span className="screener-input">
-              <input
-                type="number"
-                step={m.step}
-                value={cfg.thresholds[m.filter] ?? ''}
-                placeholder="any"
-                onChange={(e) => setThreshold(m.filter, e.target.value)}
-              />
-              {m.sided && (
-                <select value={cfg.ordersSide} onChange={(e) => set({ ordersSide: e.target.value })} title="Which side's share of pending pre-open quantity the minimum applies to">
-                  {Object.entries(ORDER_SIDES).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-                </select>
-              )}
-              {m.ranked && (
-                <label className="hint" title="Include this reading in the quality rank">
-                  <input
-                    type="checkbox"
-                    checked={cfg.inRank[m.key]}
-                    onChange={(e) => set({ inRank: { ...cfg.inRank, [m.key]: e.target.checked } })}
-                  />
-                  in rank
-                </label>
-              )}
-            </span>
-          </label>
-        ))}
-        <label className="screener-filter">
-          <span>Quality rank ≤ (top N)</span>
-          <span className="screener-input">
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={cfg.maxRank ?? ''}
-              placeholder="any"
-              onChange={(e) => set({ maxRank: e.target.value === '' ? null : Number(e.target.value) })}
-            />
-          </span>
+  const chips = [
+    ...SCREENER_METRICS.filter((m) => cfg.thresholds[m.filter] != null).map((m) => ({
+      key: m.filter,
+      text: `${m.short}${m.sided && cfg.ordersSide !== 'gap' ? ` (${ORDER_SIDES[cfg.ordersSide].toLowerCase()})` : ''} ≥ ${cfg.thresholds[m.filter]} ${m.unit}`,
+      clear: () => setThreshold(m.filter, ''),
+    })),
+    ...(cfg.maxRank != null ? [{ key: 'rank', text: `Top ${cfg.maxRank} by quality`, clear: () => set({ maxRank: null }) }] : []),
+    ...(cfg.direction !== 'both' ? [{ key: 'dir', text: cfg.direction === 'up' ? 'Gap-ups only' : 'Gap-downs only', clear: () => set({ direction: 'both' }) }] : []),
+    ...(cfg.tradeableOnly ? [{ key: 'trade', text: 'Tradeable only', clear: () => set({ tradeableOnly: false }) }] : []),
+  ];
+
+  const filterRow = (m) => {
+    const on = cfg.thresholds[m.filter] != null;
+    return (
+      <div key={m.key} className={`sf-row ${on ? 'on' : ''}`}>
+        <label className="sf-label" htmlFor={`sf-${m.key}`} title={m.help}>
+          {m.short} <span className="sf-info" aria-hidden="true">ⓘ</span>
         </label>
-        <label className="screener-filter">
-          <span>Direction</span>
-          <select value={cfg.direction} onChange={(e) => set({ direction: e.target.value })}>
-            <option value="both">Gap-ups and gap-downs</option>
-            <option value="up">Gap-ups only</option>
-            <option value="down">Gap-downs only</option>
-          </select>
-        </label>
-        <label className="screener-filter screener-check">
-          <input type="checkbox" checked={cfg.tradeableOnly} onChange={(e) => set({ tradeableOnly: e.target.checked })} />
-          <span>Tradeable only (no red flags)</span>
-        </label>
-      </div>
-      <div className="screener-summary">
-        <strong>{result.matched.length}</strong> of {result.gapped} gapped stocks match
-        {active ? ` (${active} filter${active === 1 ? '' : 's'} on)` : ' (no filters on)'} · {result.ranked} ranked
-        {active > 0 && (
-          <button type="button" className="btn ghost" onClick={() => onChange(cleanScreener({ inRank: cfg.inRank }))}>
-            Clear filters
+        <div className="sf-value">
+          <span className="sf-op">≥</span>
+          <input
+            id={`sf-${m.key}`}
+            type="number"
+            step={m.step}
+            value={cfg.thresholds[m.filter] ?? ''}
+            placeholder="any"
+            onChange={(e) => setThreshold(m.filter, e.target.value)}
+          />
+          <span className="sf-unit">{m.unit}</span>
+        </div>
+        {m.ranked ? (
+          <button
+            type="button"
+            className={`sf-rank ${cfg.inRank[m.key] ? 'in' : ''}`}
+            aria-pressed={cfg.inRank[m.key]}
+            title={cfg.inRank[m.key] ? 'Counts in the quality rank (click to leave it out)' : 'Left out of the quality rank (click to include it)'}
+            onClick={() => set({ inRank: { ...cfg.inRank, [m.key]: !cfg.inRank[m.key] } })}
+          >
+            ★
           </button>
+        ) : <span className="sf-rank-none" title="Gap size is a filter only, not part of the rank" />}
+        {m.sided && (
+          <div className="sf-seg sf-sub" role="group" aria-label="Which side of the pending orders">
+            {Object.entries(ORDER_SIDES).map(([k, label]) => (
+              <button key={k} type="button" className={cfg.ordersSide === k ? 'active' : ''} onClick={() => set({ ordersSide: k })}
+                title={k === 'gap' ? 'Buy side for gap-ups, sell side for gap-downs' : `${label} side for every stock`}>
+                {label}
+              </button>
+            ))}
+          </div>
         )}
       </div>
+    );
+  };
+
+  return (
+    <section className="stock-screener">
+      <div className="sf-head">
+        <h2>Stock filter</h2>
+        <div className="sf-count">
+          <strong>{result.matched.length}</strong> of {result.gapped} gapped stocks match
+          <span className="hint"> · {result.ranked} ranked</span>
+        </div>
+      </div>
+
+      <div className="sf-groups">
+        {SCREENER_GROUPS.map((g) => (
+          <fieldset key={g.key} className="sf-group">
+            <legend>{g.label} <span className="hint">{g.source}</span></legend>
+            {SCREENER_METRICS.filter((m) => m.group === g.key).map(filterRow)}
+          </fieldset>
+        ))}
+        <fieldset className="sf-group">
+          <legend>Result</legend>
+          <div className="sf-row">
+            <span className="sf-label">Direction</span>
+            <div className="sf-seg" role="group" aria-label="Direction">
+              {[['both', 'Both'], ['up', 'Gap-ups'], ['down', 'Gap-downs']].map(([k, label]) => (
+                <button key={k} type="button" className={cfg.direction === k ? 'active' : ''} onClick={() => set({ direction: k })}>{label}</button>
+              ))}
+            </div>
+          </div>
+          <div className={`sf-row ${cfg.maxRank != null ? 'on' : ''}`}>
+            <label className="sf-label" htmlFor="sf-rank" title="Keep only the best N by quality rank (rank 1 = best)">
+              Quality rank <span className="sf-info" aria-hidden="true">ⓘ</span>
+            </label>
+            <div className="sf-value">
+              <span className="sf-op">top</span>
+              <input
+                id="sf-rank"
+                type="number"
+                min="1"
+                step="1"
+                value={cfg.maxRank ?? ''}
+                placeholder="any"
+                onChange={(e) => set({ maxRank: e.target.value === '' ? null : Number(e.target.value) })}
+              />
+              <span className="sf-unit">stocks</span>
+            </div>
+          </div>
+          <label className={`sf-row sf-check ${cfg.tradeableOnly ? 'on' : ''}`}>
+            <input type="checkbox" checked={cfg.tradeableOnly} onChange={(e) => set({ tradeableOnly: e.target.checked })} />
+            <span>Tradeable only <span className="hint">(no red flags: T2T, at a circuit)</span></span>
+          </label>
+          <p className="hint sf-legend"><span className="sf-rank in sf-rank-demo">★</span> counts in the quality rank · ⓘ hover for details</p>
+        </fieldset>
+      </div>
+
+      <div className="sf-active">
+        {chips.length ? (
+          <>
+            {chips.map((c) => (
+              <button key={c.key} type="button" className="sf-chip" onClick={c.clear} title="Remove this filter">
+                {c.text} <span aria-hidden="true">×</span>
+              </button>
+            ))}
+            <button type="button" className="btn ghost sf-clear" onClick={() => onChange(cleanScreener({ inRank: cfg.inRank, ordersSide: cfg.ordersSide }))}>
+              Clear all
+            </button>
+          </>
+        ) : <span className="hint">No filters on: every gapped stock is listed, best rank first.</span>}
+      </div>
+
+      <details className="sf-how">
+        <summary>How the filter and the quality rank work</summary>
+        <p className="hint">
+          Type a minimum in any box; a blank box is not applied, and a stock without that reading fails the box.
+          Quality is the average percentile, among all {result.gapped} gapped stocks, of the readings marked ★
+          ({rankedLabels.join(', ') || 'none'}; at least {MIN_QUALITY_METRICS} needed). Rank 1 is the best, and the rank
+          doesn&apos;t change as you filter. It ranks setups; it does not predict the open.
+        </p>
+      </details>
+
       {shown.length > 0 ? (
         <div className="table-wrap tall">
           <table className="stock-table screener-table">

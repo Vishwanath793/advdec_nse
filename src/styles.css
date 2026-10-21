@@ -717,12 +717,47 @@ body {
 }
 
 /* Analyzer stock filter (replaced the Sector Bias spotlight) */
-.screener-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px 16px; margin: 10px 0; }
-.screener-filter { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
-.screener-filter.screener-check { flex-direction: row; align-items: center; gap: 6px; }
-.screener-input { display: flex; align-items: center; gap: 8px; }
-.screener-input input[type='number'] { width: 100px; }
-.screener-input label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.screener-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 6px 0 10px; }
+.sf-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
+.sf-head h2 { margin-bottom: 0; }
+.sf-count { font-size: 0.95rem; }
+.sf-count strong { font-size: 1.35rem; color: var(--accent); margin-right: 4px; }
+.sf-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin: 12px 0 10px; }
+.sf-group { margin: 0; padding: 8px 12px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); min-width: 0; }
+.sf-group legend { padding: 0 6px; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.sf-group legend .hint { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 4px; }
+.sf-row { display: grid; grid-template-columns: minmax(0, 1fr) auto 28px; align-items: center; gap: 4px 10px; padding: 6px 6px; border-radius: 8px; border-left: 3px solid transparent; font-size: 0.88rem; }
+.sf-row + .sf-row { margin-top: 2px; }
+.sf-row.on { background: rgba(79, 124, 255, 0.08); border-left-color: var(--accent); }
+.sf-label { color: var(--text); cursor: help; line-height: 1.25; }
+.sf-info { color: var(--muted); font-size: 0.75rem; }
+.sf-value { display: inline-flex; align-items: center; gap: 6px; justify-self: end; }
+.sf-op, .sf-unit { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+.sf-unit { min-width: 62px; }
+.sf-value input { width: 64px; padding: 5px 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 0.88rem; text-align: right; }
+.sf-value input:focus { outline: none; border-color: var(--accent); }
+.sf-row.on .sf-value input { border-color: var(--accent); }
+.sf-rank { width: 26px; height: 26px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 0.85rem; line-height: 1; }
+.sf-rank.in { color: var(--amber); border-color: rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.1); }
+.sf-rank-demo { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; font-size: 0.75rem; cursor: default; vertical-align: middle; }
+.sf-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; justify-self: end; }
+.sf-seg button { padding: 4px 10px; background: transparent; color: var(--muted); border: 0; border-left: 1px solid var(--border); cursor: pointer; font-size: 0.8rem; }
+.sf-seg button:first-child { border-left: 0; }
+.sf-seg button.active { background: var(--accent); color: #fff; }
+.sf-row > .sf-seg:not(.sf-sub) { grid-column: 2 / 4; }
+.sf-sub { grid-column: 1 / -1; justify-self: start; margin-top: 2px; }
+.sf-check { grid-template-columns: auto 1fr; cursor: pointer; }
+.sf-check input { accent-color: var(--accent); width: 16px; height: 16px; }
+.sf-legend { margin: 8px 6px 0; font-size: 0.78rem; }
+.sf-active { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 4px 0 8px; min-height: 30px; }
+.sf-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(79, 124, 255, 0.5); background: rgba(79, 124, 255, 0.12); color: #c9d6ff; font-size: 0.8rem; cursor: pointer; }
+.sf-chip span { color: var(--muted); font-size: 0.95rem; line-height: 1; }
+.sf-chip:hover span { color: var(--red); }
+.sf-clear { padding: 4px 10px; font-size: 0.8rem; }
+.sf-how { margin: 0 0 10px; }
+.sf-how summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
+@media (max-width: 520px) {
+  .sf-groups { grid-template-columns: 1fr; }
+  .sf-unit { min-width: 0; }
+}
 .order-kite { margin-top: 4px; }
 .order-kite-btn { margin-top: 4px; padding: 2px 8px; font-size: 0.8rem; }
