@@ -40,6 +40,43 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-21: Stock filter: buy/sell side choice, three more auction filters; fix the auction imbalance read after matching (Claude Code for vinayakb374, android-app, local commit)
+**What changed:**
+- **Stock filter:**
+  - Relative volume is labelled "Vol ×" (type 28 for Vol 28×).
+  - The buy/sell orders minimum can read the **gap side** (default), the **buy side** or the **sell side**. The
+    rank always uses the gap side.
+  - New typed filters (and columns, all included in the rank):
+    - **Gap-side orders held** (points vs the auction average)
+    - **Unmatched auction demand** (× matched volume, positive on the gap side)
+    - **Futures auction vs cash** (points, F&O only)
+- **Bug fix in the Auction layer (`auctionLayer.js`):**
+  - After the matching, Kite reports the imbalance as **0 for every stock**. On 21 Oct, 774 stocks were non-zero
+    at 09:08:33, 612 at 09:08:49, 46 at 09:09:06 and none at 09:09:22.
+  - The layer read the last reading, so "Unmatched auction demand" was always 0, in both the filter and the
+    Auction score.
+  - It now reads the **close-of-entry sweep**: the last sweep in which at least half of the day's peak number of
+    stocks still reported an imbalance (`closeOfEntryAt`, `auctionImbalance`). The volume and order totals it is
+    compared with come from the same sweep.
+  - On the 21 Oct file: close of entry 09:08:49, and 562 of 740 stocks have an unmatched quantity (before: 0).
+  - The other auction factors are unchanged.
+
+**Files:** `src/utils/screener.js`, `src/StockScreener.jsx`, `src/utils/auctionLayer.js`,
+`server/screener.test.js`, `server/auctionLayer.test.js`.
+
+**Tests / checks:**
+- `npm test`: 223 pass. `npm run build` succeeds.
+- Browser (this folder's frontend on :5174 against the backend on :3002, real 21 Oct data): Vol ≥ 28 → 11
+  stocks; orders ≥ 60% gap side → 203, buy side → 33; futures ≥ 0.1 pts → 26; orders held ≥ 5 → 53.
+
+**Not verified:**
+- The imbalance fix **in the running app**. The auction features are computed by the backend (the context API),
+  and the backend on :3002 runs the old code from `C:\Users\DELL\advdec_nse`, so Unmatched still shows 0 there
+  until a backend runs this folder's code.
+- Whether 50% of the peak is the right cut-off on other days. Only 21 Oct has been looked at.
+
+**Next:** run the backend from `C:\Users\Public\advdec_nse` (port 3001) and check the Unmatched column.
+
 ### 2026-10-21: Analyzer: Stock filter with a quality rank replaces "Sector Bias" (Claude Code for vinayakb374, android-app, local commit)
 **What changed:**
 - The **Sector Bias (breadth > 65%)** section is removed, along with its `bias` calculation in `App.jsx`. The

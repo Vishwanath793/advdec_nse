@@ -64,6 +64,33 @@ test('thresholds: blank is off, missing data fails, rank and direction and trade
   assert.match(screenStocks(stocks, { thresholds: { minDrift: 0.5 } }).rows.find((x) => x.stock.symbol === 'DOWN').failed.join(), /no data/);
 });
 
+test('auction readings: orders held, unmatched demand and futures vs cash, in the gap direction', () => {
+  const auction = { gap: 2, earlyGap: 1.5, buyShare: 0.7, avgBuyShare: 0.6, imbalance: 50000, volume: 100000, buyQty: 900000, sellQty: 400000, future: { gap: 2.4, volume: 5000 } };
+  const up = screenerMetrics(stock('A', { auction }), []);
+  assert.ok(Math.abs(up.heldPts - 10) < 1e-9); // 70% buy at the end vs 60% on average
+  assert.equal(up.imbalanceX, 0.5); // 50,000 unmatched on the buy side ÷ 100,000 matched
+  assert.ok(Math.abs(up.futuresPts - 0.4) < 1e-9);
+  // The same auction read for a gap-down: every reading turns against it.
+  const down = screenerMetrics(stock('B', { status: 'decline', pctChange: -2, auction }), []);
+  assert.ok(Math.abs(down.heldPts + 10) < 1e-9);
+  assert.equal(down.imbalanceX, -0.5);
+  assert.ok(Math.abs(down.futuresPts + 0.4) < 1e-9);
+  // A future without pre-open volume is left out.
+  assert.equal(screenerMetrics(stock('C', { auction: { ...auction, future: { gap: 3, volume: 0 } } }), []).futuresPts, null);
+  const stocks = [stock('A', { auction }), stock('B', { status: 'decline', pctChange: -2, auction })];
+  const names = (settings) => screenStocks(stocks, settings).matched.map((r) => r.stock.symbol);
+  assert.deepEqual(names({ thresholds: { minHeld: 5, minImbalance: 0.3, minFutures: 0.2 } }), ['A']);
+});
+
+test('the buy/sell orders minimum reads the gap side, the buy side or the sell side', () => {
+  const stocks = [stock('UP', { buyQty: 700, sellQty: 300 }), stock('DOWN', { status: 'decline', pctChange: -1, buyQty: 300, sellQty: 700 })];
+  const names = (settings) => screenStocks(stocks, settings).matched.map((r) => r.stock.symbol).sort();
+  assert.deepEqual(names({ thresholds: { minOrders: 60 } }), ['DOWN', 'UP']); // 70% on the gap side for both
+  assert.deepEqual(names({ ordersSide: 'buy', thresholds: { minOrders: 60 } }), ['UP']);
+  assert.deepEqual(names({ ordersSide: 'sell', thresholds: { minOrders: 60 } }), ['DOWN']);
+  assert.equal(cleanScreener({ ordersSide: 'both' }).ordersSide, 'gap');
+});
+
 test('saved settings are cleaned: bad numbers dropped, defaults filled in', () => {
   const c = cleanScreener({ direction: 'sideways', maxRank: '0', thresholds: { minGap: 'abc', minRvol: '1.5' }, inRank: { rvolX: false } });
   assert.equal(c.direction, 'both');

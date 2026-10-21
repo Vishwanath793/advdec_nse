@@ -15,6 +15,14 @@
  *   driftPts   gap built during the auction: the indicative gap's change from
  *              09:04 to the end of order entry, in the gap direction (points;
  *              Kite pre-open readings, auctionLayer.js)
+ *   heldPts    gap-side orders held: the gap-side share of pending orders at the
+ *              end of order entry minus its average through the auction (points)
+ *   imbalanceX unmatched auction demand: Kite's imbalance quantity ÷ the matched
+ *              volume, positive when the unmatched side is the gap side (×)
+ *   futuresPts futures auction vs cash: the near-month future's pre-open gap minus
+ *              the stock's, in the gap direction (points; F&O stocks only)
+ * The orders threshold can be read on the gap side (default), the buy side or
+ * the sell side; the rank always uses the gap side.
  *
  * Quality = the average percentile of the readings switched into the rank,
  * each taken among all gapped stocks that have it (0–100). It needs at least
@@ -22,22 +30,31 @@
  * any threshold, so it doesn't move as filters change. A ranking, not a forecast.
  */
 
+import { auctionImbalance } from './auctionLayer.js';
+
 export const MIN_QUALITY_METRICS = 3;
 export const SCREENER_LIMIT = 200;
 
 export const SCREENER_METRICS = [
   { key: 'absGap', label: 'Gap size', filter: 'minGap', filterLabel: 'Gap size ≥ (%, either side)', unit: '%', step: 0.1, ranked: false },
-  { key: 'rvolX', label: 'Relative volume', filter: 'minRvol', filterLabel: 'Relative volume ≥ (× typical stock)', unit: '×', step: 0.5, ranked: true },
-  { key: 'ordersPct', label: 'Gap-side orders', filter: 'minOrders', filterLabel: 'Gap-side buy/sell orders ≥ (%)', unit: '%', step: 5, ranked: true },
+  { key: 'rvolX', label: 'Relative volume', filter: 'minRvol', filterLabel: 'Relative volume ≥ (Vol ×, times the typical stock)', unit: '×', step: 1, ranked: true },
+  { key: 'ordersPct', label: 'Buy/sell orders', filter: 'minOrders', filterLabel: 'Buy/sell orders ≥ (% of pending pre-open quantity)', unit: '%', step: 5, ranked: true, sided: true },
   { key: 'valuePct', label: 'Pre-open value', filter: 'minValuePct', filterLabel: 'Pre-open value higher than (% of stocks)', unit: '%', step: 5, ranked: true },
   { key: 'delivPct', label: 'Delivery % (yesterday)', filter: 'minDeliv', filterLabel: 'Delivery % yesterday ≥', unit: '%', step: 5, ranked: true },
   { key: 'delivQtyX', label: 'Delivery quantity surge', filter: 'minDelivQtyX', filterLabel: 'Delivery quantity surge ≥ (× its usual)', unit: '×', step: 0.5, ranked: true },
   { key: 'driftPts', label: 'Gap built during the auction', filter: 'minDrift', filterLabel: 'Gap built during the auction ≥ (points)', unit: 'pts', step: 0.1, ranked: true },
+  { key: 'heldPts', label: 'Gap-side orders held', filter: 'minHeld', filterLabel: 'Gap-side orders held ≥ (points vs the auction average)', unit: 'pts', step: 1, ranked: true },
+  { key: 'imbalanceX', label: 'Unmatched auction demand', filter: 'minImbalance', filterLabel: 'Unmatched auction demand ≥ (× matched volume, gap side)', unit: '×', step: 0.1, ranked: true },
+  { key: 'futuresPts', label: 'Futures auction vs cash', filter: 'minFutures', filterLabel: 'Futures auction vs cash ≥ (points, F&O only)', unit: 'pts', step: 0.1, ranked: true },
 ];
+
+/** Which side the buy/sell orders threshold reads. */
+export const ORDER_SIDES = { gap: 'Gap side (buy for gap-ups, sell for gap-downs)', buy: 'Buy side', sell: 'Sell side' };
 
 /** Default filter settings: no thresholds, both directions, every reading in the rank. */
 export const DEFAULT_SCREENER = {
   direction: 'both', // 'both' | 'up' | 'down'
+  ordersSide: 'gap', // 'gap' | 'buy' | 'sell'
   tradeableOnly: false,
   maxRank: null,
   thresholds: Object.fromEntries(SCREENER_METRICS.map((m) => [m.filter, null])),
@@ -51,6 +68,7 @@ export function cleanScreener(saved) {
   const s = saved && typeof saved === 'object' ? saved : {};
   return {
     direction: ['both', 'up', 'down'].includes(s.direction) ? s.direction : 'both',
+    ordersSide: Object.hasOwn(ORDER_SIDES, s.ordersSide ?? '') ? s.ordersSide : 'gap',
     tradeableOnly: s.tradeableOnly === true,
     maxRank: num(s.maxRank) != null && num(s.maxRank) >= 1 ? Math.floor(num(s.maxRank)) : null,
     thresholds: Object.fromEntries(SCREENER_METRICS.map((m) => [m.filter, num(s.thresholds?.[m.filter])])),
@@ -83,17 +101,28 @@ export function screenerMetrics(s, valuesSorted) {
   const dir = s.status === 'advance' ? 1 : s.status === 'decline' ? -1 : 0;
   const pendingTotal = (s.buyQty ?? 0) + (s.sellQty ?? 0);
   const a = s.auction;
+  const buyPct = s.buyQty != null && s.sellQty != null && pendingTotal > 0 ? (s.buyQty / pendingTotal) * 100 : null;
+  // Same readings as the Auction layer's factors (auctionLayer.js), kept in raw units for typed thresholds.
+  const imb = auctionImbalance(a);
   return {
     dir,
     absGap: s.pctChange != null ? Math.abs(s.pctChange) : null,
     rvolX: s.rvolX ?? null,
-    ordersPct: s.buyQty != null && s.sellQty != null && pendingTotal > 0 ? ((dir > 0 ? s.buyQty : s.sellQty) / pendingTotal) * 100 : null,
+    buyPct,
+    sellPct: buyPct == null ? null : 100 - buyPct,
+    ordersPct: buyPct == null ? null : dir > 0 ? buyPct : 100 - buyPct,
     valuePct: s.valueCr != null && valuesSorted.length ? shareBelow(valuesSorted, s.valueCr) * 100 : null,
     delivPct: s.delivPct ?? null,
     delivQtyX: s.delivQtyX ?? null,
     driftPts: a?.gap != null && a.earlyGap != null ? dir * (a.gap - a.earlyGap) : null,
+    heldPts: a?.buyShare != null && a.avgBuyShare != null ? dir * (a.buyShare - a.avgBuyShare) * 100 : null,
+    imbalanceX: imb ? dir * imb.side * imb.x : null,
+    futuresPts: a?.future?.gap != null && a.future.volume > 0 && a.gap != null ? dir * (a.future.gap - a.gap) : null,
   };
 }
+
+/** The value a threshold is compared with (the orders one reads the chosen side). */
+const filterValue = (m, metrics, cfg) => (m.sided && cfg.ordersSide !== 'gap' ? metrics[`${cfg.ordersSide}Pct`] : metrics[m.key]);
 
 /**
  * Screen the analysed `stocks` with `settings` (see DEFAULT_SCREENER).
@@ -131,7 +160,7 @@ export function screenStocks(stocks, settings = DEFAULT_SCREENER) {
     for (const m of SCREENER_METRICS) {
       const min = cfg.thresholds[m.filter];
       if (min == null) continue;
-      const v = r.metrics[m.key];
+      const v = filterValue(m, r.metrics, cfg);
       if (v == null) failed.push(`${m.label}: no data`);
       else if (v < min) failed.push(`${m.label} below ${min}`);
     }

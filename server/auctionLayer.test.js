@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyAuctionLayer, AUCTION_FACTORS, auctionFeatures, auctionLayerFactors } from '../src/utils/auctionLayer.js';
+import { applyAuctionLayer, AUCTION_FACTORS, auctionFeatures, auctionLayerFactors, closeOfEntryAt } from '../src/utils/auctionLayer.js';
 import { AUCTION_END_MS, auctionFile, createAuctionTracker, SWEEP_EVERY_MS } from '../src/core/auctionTracker.js';
 import { analyze } from '../src/utils/analysis.js';
 import { CONVICTION_FACTORS, DEFAULT_FACTOR_SETTINGS } from '../src/utils/conviction.js';
@@ -74,6 +74,20 @@ test('factors read in the gap direction', () => {
   assert.ok(b.aOrdersHeld.value < 0.5);
   assert.equal(b.aFutures, undefined); // no future
   assert.deepEqual(auctionLayerFactors({ auction: null }, 1), {});
+});
+
+test('the imbalance is read before the matching, when Kite resets it to 0 for every stock', () => {
+  // As on 21 Oct 2026: imbalances live through 09:08:30, then 0 everywhere after the matching.
+  const after = (time) => ({ t: at(time), q: [[0, 102, 2100, 800, 200, 0], [1, 201, 450, 400, 600, 0]] });
+  const withMatching = { ...saved, snaps: [...saved.snaps, after('09:09:10'), after('09:09:30')] };
+  const f = auctionFeatures(withMatching);
+  assert.equal(f.symbols.AAA.imbalance, 0); // the last reading
+  assert.equal(f.symbols.AAA.imbalanceAtClose, 2000); // the close-of-entry reading
+  assert.equal(f.symbols.AAA.closeAt, at('09:08:30'));
+  const up = auctionLayerFactors({ auction: { ...f.symbols.AAA, market: f.market } }, 1);
+  assert.equal(up.aImbalance.value, 1); // 2,000 unmatched ÷ 2,000 matched, as before the matching
+  assert.match(up.aImbalance.detail, /09:08:30/);
+  assert.equal(closeOfEntryAt([{ t: 1, q: [[0, 1, 1, 1, 1, 0]] }]), null); // no imbalance data at all
 });
 
 test('a negative imbalance is taken as the sell side', () => {

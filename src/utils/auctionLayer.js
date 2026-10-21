@@ -43,6 +43,23 @@ export const AUCTION_FACTORS = [
 
 /** The early reading the drift is measured from. */
 export const AUCTION_REF_TIME = '09:04';
+/**
+ * After the matching, Kite reports the imbalance as 0 for every stock (21 Oct
+ * 2026: 774 stocks non-zero at 09:08:33, 612 at 09:08:49, 46 at 09:09:06, none
+ * at 09:09:22). The imbalance is read from the close-of-entry reading: the last
+ * sweep in which at least this share of the day's peak number of stocks still
+ * reported one.
+ */
+export const CLOSE_IMBALANCE_SHARE = 0.5;
+
+/** Time of the close-of-entry sweep (see CLOSE_IMBALANCE_SHARE), or null without imbalance data. */
+export function closeOfEntryAt(snaps) {
+  const counts = snaps.map((s) => (s.q ?? []).filter((r) => r[5] != null && r[5] !== 0).length);
+  const peak = Math.max(0, ...counts);
+  if (!peak) return null;
+  for (let i = snaps.length - 1; i >= 0; i--) if (counts[i] >= peak * CLOSE_IMBALANCE_SHARE) return snaps[i].t;
+  return null;
+}
 /** The drift needs at least this long between the early and the final reading. */
 export const MIN_DRIFT_MS = 2 * 60_000;
 /** Full-marks points. */
@@ -75,11 +92,13 @@ function seriesByKey(saved) {
 }
 
 /** Features for one instrument, or null without an indicative price. */
-function instrumentFeatures(points, meta, ref) {
+function instrumentFeatures(points, meta, ref, close) {
   if (!points.length) return null;
   const [prevClose = null, lower = null, upper = null] = meta ?? [];
   const last = points.at(-1);
   const early = [...points].reverse().find((p) => p.t <= ref);
+  // Imbalance (with the volume and order totals it is compared with) from before the matching.
+  const atClose = [...points].reverse().find((p) => p.t <= close) ?? last;
   const share = (p) => (p.buy + p.sell > 0 ? p.buy / (p.buy + p.sell) : null);
   const shares = points.map(share).filter((s) => s != null);
   return {
@@ -96,6 +115,11 @@ function instrumentFeatures(points, meta, ref) {
     buyQty: last.buy ?? null,
     sellQty: last.sell ?? null,
     imbalance: last.imbalance ?? null,
+    imbalanceAtClose: atClose.imbalance ?? null,
+    volumeAtClose: atClose.volume ?? null,
+    buyAtClose: atClose.buy ?? null,
+    sellAtClose: atClose.sell ?? null,
+    closeAt: atClose.t,
     lowerCircuit: lower,
     upperCircuit: upper,
   };
@@ -108,11 +132,12 @@ function instrumentFeatures(points, meta, ref) {
 export function auctionFeatures(saved) {
   if (!saved?.date || !Array.isArray(saved.keys) || !Array.isArray(saved.snaps) || !saved.snaps.length) return null;
   const ref = +istInstant(saved.date, AUCTION_REF_TIME);
+  const close = closeOfEntryAt(saved.snaps) ?? saved.snaps.at(-1).t;
   const series = seriesByKey(saved);
   const indexOf = new Map(saved.keys.map((k, i) => [k, i]));
   const feature = (key) => {
     const i = indexOf.get(key);
-    return i == null ? null : instrumentFeatures(series[i], saved.meta?.[i], ref);
+    return i == null ? null : instrumentFeatures(series[i], saved.meta?.[i], ref, close);
   };
   const symbols = {};
   for (const key of saved.keys) {
@@ -148,6 +173,22 @@ export function attachAuction(stocks, auction) {
 }
 
 /**
+ * Kite's unmatched quantity at the close of order entry, as { qty, side (+1 buy,
+ * −1 sell), x (÷ matched volume), volume, at }, or null. The side is read from
+ * the buy/sell totals unless Kite sends a negative imbalance. Features saved
+ * before the close-of-entry reading was kept fall back to the last reading.
+ */
+export function auctionImbalance(a) {
+  const imbalance = a?.imbalanceAtClose ?? a?.imbalance;
+  const volume = a?.volumeAtClose ?? a?.volume;
+  const buy = a?.buyAtClose ?? a?.buyQty;
+  const sell = a?.sellAtClose ?? a?.sellQty;
+  if (imbalance == null || !(volume > 0) || buy == null || sell == null) return null;
+  const side = imbalance < 0 ? -1 : buy >= sell ? 1 : -1;
+  return { qty: Math.abs(imbalance), side, x: Math.abs(imbalance) / volume, volume, at: a.closeAt ?? a.at };
+}
+
+/**
  * The auction factors for one stock in direction `dir` (+1 gap-up, −1 gap-down):
  * { key: { value 0..1, detail } } for the factors that have data.
  */
@@ -174,13 +215,12 @@ export function auctionLayerFactors(stock, dir) {
     };
   }
 
-  if (a.imbalance != null && a.volume > 0 && a.buyQty != null && a.sellQty != null) {
-    const side = a.imbalance < 0 ? -1 : a.buyQty >= a.sellQty ? 1 : -1;
-    const x = Math.abs(a.imbalance) / a.volume;
-    const value = 0.5 + 0.5 * clampSigned((dir * side * x) / IMBALANCE_FULL_X);
+  const imb = auctionImbalance(a);
+  if (imb) {
+    const value = 0.5 + 0.5 * clampSigned((dir * imb.side * imb.x) / IMBALANCE_FULL_X);
     out.aImbalance = {
       value,
-      detail: `${Math.abs(a.imbalance).toLocaleString('en-IN')} unmatched on the ${side > 0 ? 'buy' : 'sell'} side = ${times(x)} the ${a.volume.toLocaleString('en-IN')} matched: ${leaning(value)}`,
+      detail: `${imb.qty.toLocaleString('en-IN')} unmatched on the ${imb.side > 0 ? 'buy' : 'sell'} side = ${times(imb.x)} the ${imb.volume.toLocaleString('en-IN')} matched at ${hhmm(imb.at)}: ${leaning(value)}`,
     };
   }
 

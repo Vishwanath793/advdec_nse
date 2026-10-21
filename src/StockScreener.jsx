@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { cleanScreener, MIN_QUALITY_METRICS, SCREENER_LIMIT, SCREENER_METRICS, screenStocks } from './utils/screener.js';
+import { cleanScreener, MIN_QUALITY_METRICS, ORDER_SIDES, SCREENER_LIMIT, SCREENER_METRICS, screenStocks } from './utils/screener.js';
 
 /**
  * Analyzer: the stock filter (replaces the old "Sector Bias" spotlight). Every
@@ -9,6 +9,8 @@ import { cleanScreener, MIN_QUALITY_METRICS, SCREENER_LIMIT, SCREENER_METRICS, s
  */
 
 const fmt = (v, d = 1) => (v == null ? '—' : v.toFixed(d));
+const tone = (v) => (v > 0 ? 'adv-text' : v < 0 ? 'dec-text' : '');
+const signedCell = (v, d) => (v == null ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(d)}`);
 const times = (v) => (v == null ? '—' : `${v >= 10 ? Math.round(v) : v.toFixed(1)}×`);
 
 export default function StockScreener({ stocks, settings, onChange, onTrade }) {
@@ -42,6 +44,11 @@ export default function StockScreener({ stocks, settings, onChange, onTrade }) {
                 placeholder="any"
                 onChange={(e) => setThreshold(m.filter, e.target.value)}
               />
+              {m.sided && (
+                <select value={cfg.ordersSide} onChange={(e) => set({ ordersSide: e.target.value })} title="Which side's share of pending pre-open quantity the minimum applies to">
+                  {Object.entries(ORDER_SIDES).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                </select>
+              )}
               {m.ranked && (
                 <label className="hint" title="Include this reading in the quality rank">
                   <input
@@ -101,11 +108,14 @@ export default function StockScreener({ stocks, settings, onChange, onTrade }) {
                 <th className="num">%Chg</th>
                 <th className="num" title="Average percentile of the readings in the rank (0–100)">Quality</th>
                 <th className="num" title="Pre-open quantity vs its 20-day average daily volume, as a multiple of the typical stock">Rel. vol</th>
-                <th className="num" title="Gap-side share of pending pre-open buy + sell quantity">Gap-side orders</th>
+                <th className="num" title="Share of pending pre-open buy + sell quantity on the gap side (buy for gap-ups, sell for gap-downs)">Buy/sell orders</th>
                 <th className="num" title="Pre-open traded value; the percentile is the share of all stocks it beats">Pre-open value</th>
                 <th className="num">Deliv %</th>
                 <th className="num" title="Yesterday's delivered shares ÷ the 20-session average">Deliv qty ×</th>
                 <th className="num" title="Indicative gap change from 09:04 to the end of order entry, in the gap direction (Kite pre-open readings)">Auction build</th>
+                <th className="num" title="Gap-side share of pending orders at the end of order entry minus its average through the auction (points)">Orders held</th>
+                <th className="num" title="Kite's imbalance quantity ÷ matched volume; positive when the unmatched side is the gap side">Unmatched</th>
+                <th className="num" title="Near-month future's pre-open gap minus the stock's, in the gap direction (points; F&amp;O only)">Futures vs cash</th>
                 <th className="num">Conviction</th>
                 <th className="num">Action</th>
               </tr>
@@ -126,13 +136,19 @@ export default function StockScreener({ stocks, settings, onChange, onTrade }) {
                       {quality ?? '—'}{quality != null && qualityParts < result.rankedKeys.length && <span className="hint"> {qualityParts}/{result.rankedKeys.length}</span>}
                     </td>
                     <td className="num">{times(m.rvolX)}</td>
-                    <td className="num">{m.ordersPct == null ? '—' : `${Math.round(m.ordersPct)}% ${up ? 'buy' : 'sell'}`}</td>
+                    <td className="num" title={m.buyPct == null ? '' : `Pending pre-open quantity: ${Math.round(m.buyPct)}% buy, ${Math.round(m.sellPct)}% sell`}>
+                      {m.buyPct == null ? '—' : cfg.ordersSide === 'buy' ? `${Math.round(m.buyPct)}% buy`
+                        : cfg.ordersSide === 'sell' ? `${Math.round(m.sellPct)}% sell` : `${Math.round(m.ordersPct)}% ${up ? 'buy' : 'sell'}`}
+                    </td>
                     <td className="num" title={m.valuePct == null ? '' : `Higher than ${Math.round(m.valuePct)}% of stocks`}>
                       {s.valueCr == null ? '—' : `₹${s.valueCr.toFixed(2)} Cr`}{m.valuePct != null && <span className="hint"> · {Math.round(m.valuePct)}%</span>}
                     </td>
                     <td className="num">{fmt(m.delivPct)}</td>
                     <td className="num">{times(m.delivQtyX)}</td>
-                    <td className={`num ${m.driftPts > 0 ? 'adv-text' : m.driftPts < 0 ? 'dec-text' : ''}`}>{m.driftPts == null ? '—' : `${m.driftPts > 0 ? '+' : m.driftPts < 0 ? '−' : ''}${Math.abs(m.driftPts).toFixed(2)}`}</td>
+                    <td className={`num ${tone(m.driftPts)}`}>{signedCell(m.driftPts, 2)}</td>
+                    <td className={`num ${tone(m.heldPts)}`}>{signedCell(m.heldPts, 1)}</td>
+                    <td className={`num ${tone(m.imbalanceX)}`}>{m.imbalanceX == null ? '—' : `${signedCell(m.imbalanceX, 2)}×`}</td>
+                    <td className={`num ${tone(m.futuresPts)}`}>{signedCell(m.futuresPts, 2)}</td>
                     <td className="num">{s.convictionScore ?? '—'}</td>
                     <td className="num">
                       <button type="button" className={`btn trade ${up ? 'buy' : 'sell'}`} onClick={() => onTrade(s, up ? 'BUY' : 'SELL')}>
@@ -151,7 +167,7 @@ export default function StockScreener({ stocks, settings, onChange, onTrade }) {
       {result.matched.length > SCREENER_LIMIT && <p className="hint">Showing the first {SCREENER_LIMIT} by rank.</p>}
       <p className="hint">
         Sources: gap, orders and value from NSE&apos;s pre-open; relative volume against the 20-day average volume;
-        delivery % and delivery quantity from NSE&apos;s end-of-day files; auction build from the Kite pre-open readings
+        delivery % and delivery quantity from NSE&apos;s end-of-day files; auction build, orders held, unmatched demand and futures vs cash from the Kite pre-open readings
         the app records (09:00–09:09; blank on days without them). BUY/SELL places the order straight away, as in the
         top movers.
       </p>
