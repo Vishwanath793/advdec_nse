@@ -43,7 +43,7 @@ test('routes: list, create, validate, cancel', async () => {
   const srv = await startServer();
   try {
     let r = await srv.call('GET', '/api/orders/scheduled');
-    assert.deepEqual([r.status, r.json], [200, { orders: [], session: { connected: false, userId: null } }]);
+    assert.deepEqual([r.status, r.json], [200, { orders: [], session: { connected: false, userId: null }, clock: null }]);
 
     r = await srv.call('POST', '/api/orders/scheduled', { order: order({ orderType: 'LIMIT', price: 1503.37 }) });
     assert.equal(r.status, 201);

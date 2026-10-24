@@ -20,6 +20,7 @@ import { createRecorder } from '../src/core/recorder.js';
 import { createAutoExport } from './autoExport.js';
 import { createOrderScheduler } from '../src/core/orderScheduler.js';
 import { createThreadSender } from './orderSender.js';
+import { createNetworkClock } from './networkClock.js';
 import { createNseLiveService } from '../src/core/nseLive.js';
 import { createOpeningCollector } from '../src/core/openingCollector.js';
 import { createInstrumentService } from '../src/core/instruments.js';
@@ -276,10 +277,14 @@ const kite = createKiteClient();
 // Time-triggered orders ("BUY 10 INFY at market at 09:15:00"), sent to Kite by the
 // backend at the chosen second. The Kite token is held in memory only: the
 // browser hands it over whenever it has a session (PUT /api/orders/session).
+// Network time, so a timed order leaves at real 09:15:00 even when this PC's clock is off (server/networkClock.js).
+const networkClock = createNetworkClock().start();
 const orderScheduler = createOrderScheduler({
   store: fsStore(fileURLToPath(new URL('../.data', import.meta.url))),
   calendar,
   placeOrder: (args) => kite.placeOrder(args),
+  clockOffsetMs: () => networkClock.offsetMs(),
+  clockStatus: () => networkClock.status(),
   // Sent from a worker thread at the exact time, away from the opening's tick flood.
   sender: createThreadSender(),
   // Kite's own record (received, at the exchange, fills) for each placed order.

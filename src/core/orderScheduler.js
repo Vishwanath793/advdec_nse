@@ -236,7 +236,11 @@ export function kiteTimeline(history = [], trades = []) {
 export function createOrderScheduler({
   store, placeOrder, calendar, now = () => new Date(), onChange = () => {},
   setTimer = setTimeout, clearTimer = clearTimeout, sender = null, orderDetails = null,
+  // Network time minus this PC's clock, in ms (server/networkClock.js). Orders are timed on network time.
+  clockOffsetMs = () => 0, clockStatus = () => null,
 }) {
+  /** Network time as a Date: the scheduler's clock (every trigger, check and timestamp uses it). */
+  const netNow = () => new Date(+now() + clockOffsetMs());
   let orders = [];
   let session = null; // { apiKey, accessToken, userId } — memory only
   const timers = new Map();
@@ -269,7 +273,7 @@ export function createOrderScheduler({
   function arm(o) {
     clearTimer(timers.get(o.id));
     if (o.status !== 'scheduled') return;
-    const delay = new Date(o.triggerAt) - PREARM_MS - now();
+    const delay = new Date(o.triggerAt) - PREARM_MS - netNow();
     timers.set(o.id, setTimer(() => { fire(o.id).catch(() => {}); }, Math.max(0, Math.min(delay, MAX_TIMER_MS))));
   }
 
@@ -281,7 +285,7 @@ export function createOrderScheduler({
   async function fire(id) {
     const o = orders.find((x) => x.id === id);
     if (!o || o.status !== 'scheduled') return o;
-    const t = now();
+    const t = netNow();
     const due = new Date(o.triggerAt);
     if (t < due - PREARM_MS - 20) { arm(o); return o; } // woke early (or a long wait in steps)
     if (t - due > ORDER_GRACE_MS) {
@@ -293,15 +297,19 @@ export function createOrderScheduler({
       return o;
     }
     await update(o, { status: 'placing', result: { armedAt: t.toISOString() } });
-    const r = await send.send({ order: kiteOrderFor(o), session: { apiKey: session.apiKey, accessToken: session.accessToken }, due: +due, grace: ORDER_GRACE_MS });
+    // The sender works on the PC clock: give it the target on that clock, and convert its times back.
+    const offset = clockOffsetMs();
+    const r = await send.send({ order: kiteOrderFor(o), session: { apiKey: session.apiKey, accessToken: session.accessToken }, due: +due - offset, grace: ORDER_GRACE_MS });
     if (r.ok) {
+      const sentAt = r.sentAt + offset; // network time the request left
       await update(o, {
         status: 'placed',
         result: {
           orderId: r.orderId,
-          sentAt: new Date(r.sentAt).toISOString(),
-          sendDelayMs: r.sentAt - due, // from the chosen time to the request leaving
+          sentAt: new Date(sentAt).toISOString(),
+          sendDelayMs: sentAt - +due, // from the chosen time to the request leaving (network time)
           kiteMs: r.confirmedAt - r.sentAt, // Kite's round trip
+          clockOffsetMs: offset, // the PC clock's error at the send, for checking the timing later
           attempts: r.attempts,
         },
       });
@@ -312,7 +320,7 @@ export function createOrderScheduler({
         status: 'failed',
         result: {
           error: expired ? `Kite session expired or invalid: log in to Kite again in Settings. (${r.message})` : r.message,
-          at: new Date(r.at).toISOString(),
+          at: new Date(r.at + offset).toISOString(),
           attempts: r.attempts,
         },
       });
@@ -335,15 +343,17 @@ export function createOrderScheduler({
   async function checkKite(o) {
     const orderId = o.result?.orderId;
     if (!orderDetails || !orderId) return null;
+    const at = netNow().toISOString();
     let kite;
-    if (!session?.accessToken) kite = { error: 'Kite is not connected: log in to read the order from Kite.', checkedAt: now().toISOString() };
-    else {
-      try {
-        const { history, trades } = await orderDetails({ apiKey: session.apiKey, accessToken: session.accessToken, orderId });
-        kite = { ...kiteTimeline(history, trades), checkedAt: now().toISOString() };
-      } catch (error) {
-        kite = { error: error.message, checkedAt: now().toISOString() };
-      }
+    try {
+      if (!session?.accessToken) throw new Error('Kite is not connected: log in to read the order from Kite.');
+      const { history, trades } = await orderDetails({ apiKey: session.apiKey, accessToken: session.accessToken, orderId });
+      kite = { ...kiteTimeline(history, trades), checkedAt: at };
+    } catch (error) {
+      // A failed check keeps the last good record (Kite keeps the day's orders only, so a later check can
+      // fail after an earlier one worked) and says when the check failed.
+      const last = o.result?.kite && !o.result.kite.error ? o.result.kite : null;
+      kite = last ? { ...last, checkError: error.message, checkErrorAt: at } : { error: error.message, checkedAt: at };
     }
     await update(o, { result: { ...o.result, kite } });
     return kite;
@@ -353,7 +363,7 @@ export function createOrderScheduler({
     loaded ??= (async () => {
       orders = (await store.read(FILE))?.orders ?? [];
       nextId = orders.reduce((m, o) => Math.max(m, Number(String(o.id).replace(/\D/g, '')) || 0), 0) + 1;
-      const t = now();
+      const t = netNow();
       for (const o of orders) {
         // Interrupted while sending: don't resend, the order may have reached Kite.
         if (o.status === 'placing') {
@@ -379,11 +389,11 @@ export function createOrderScheduler({
     sessionStatus: () => ({ connected: Boolean(session), userId: session?.userId ?? null }),
     async add(input) {
       await load();
-      const { order, warnings } = validateScheduledOrder(input, now(), calendar);
+      const { order, warnings } = validateScheduledOrder(input, netNow(), calendar);
       const duplicate = orders.find((o) => o.status === 'scheduled' && o.symbol === order.symbol && o.side === order.side
         && o.quantity === order.quantity && o.triggerAt === order.triggerAt && o.orderType === order.orderType && o.price === order.price);
       if (duplicate) throw new Error(`The same order is already scheduled (${duplicate.id}).`);
-      const o = { id: `S${nextId++}`, ...order, createdAt: now().toISOString(), status: 'scheduled', result: null };
+      const o = { id: `S${nextId++}`, ...order, createdAt: netNow().toISOString(), status: 'scheduled', result: null };
       orders.push(o);
       await save();
       arm(o);
@@ -397,7 +407,7 @@ export function createOrderScheduler({
       if (o.status !== 'scheduled') throw new Error(`It can't be cancelled: it is already ${o.status}.`);
       clearTimer(timers.get(id));
       timers.delete(id);
-      await update(o, { status: 'cancelled', result: { at: now().toISOString() } });
+      await update(o, { status: 'cancelled', result: { at: netNow().toISOString() } });
       return o;
     },
     /** Read Kite's record of a placed order now (Kite keeps the day's orders only). */
@@ -410,6 +420,8 @@ export function createOrderScheduler({
       await checkKite(o);
       return o;
     },
+    /** The network-clock status for the Orders page (null when the scheduler has no clock). */
+    clock: () => clockStatus(),
     fire, // exposed for tests
     stop() {
       for (const t of [...timers.values(), ...kiteTimers.values()]) clearTimer(t);

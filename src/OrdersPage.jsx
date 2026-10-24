@@ -42,6 +42,32 @@ function countdown(ms) {
  * Time-triggered orders: pick a stock, Buy or Sell, quantity, Market or
  * Limit, and the second it should be sent to Kite.
  */
+/**
+ * How far this PC's clock is from network time. Orders are timed on network time, so a PC clock
+ * that is off is corrected here; if network time can't be read, orders use the last known offset.
+ */
+function ClockNote({ clock }) {
+  if (!clock) return null;
+  const when = (iso) => (iso ? new Date(iso).toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' }) : null);
+  if (!clock.synced) {
+    return (
+      <div className="alert warn" role="status">
+        Network time is not available, so orders are timed on this PC’s clock {clock.offsetMs != null ? `corrected by its last known offset (${clock.offsetMs > 0 ? '+' : ''}${clock.offsetMs} ms)` : 'with no correction'}.
+        {' '}{clock.error}
+      </div>
+    );
+  }
+  const off = clock.offsetMs;
+  const big = Math.abs(off) > 250;
+  return (
+    <p className={`hint clock-note ${big ? 'dec-text' : ''}`} title={`Measured against ${clock.server} at ${when(clock.syncedAt)} IST (round trip ${clock.rttMs} ms). Orders are sent at network time.`}>
+      This PC’s clock is {Math.abs(off)} ms {off < 0 ? 'ahead of' : off > 0 ? 'behind' : 'in line with'} network time
+      {off !== 0 ? `; orders are timed ${off < 0 ? 'later' : 'earlier'} by that much to leave at the chosen second` : ''}.
+      {big ? ' That is large: check the Windows date & time settings.' : ''}
+    </p>
+  );
+}
+
 /** Kite's own record of a placed order: received by Kite, at the exchange, fills (Kite's times are to the second). */
 function KiteTimeline({ k }) {
   if (!k) return null;
@@ -56,6 +82,7 @@ function KiteTimeline({ k }) {
         ? `filled ${k.filledQuantity ?? fills.reduce((s, f) => s + f.quantity, 0)} at ${fillTimes.join(', ')}${k.averagePrice ? `, average ${rs(k.averagePrice)}` : ''} (${fills.length} trade${fills.length === 1 ? '' : 's'})`
         : `no fills yet`}
       {' '}· {k.status ?? 'status unknown'}{k.statusMessage ? ` (${k.statusMessage})` : ''}
+      {k.checkError && <div>The latest Kite check failed ({k.checkError}); the record above is from an earlier, successful check.</div>}
     </div>
   );
 }
@@ -64,6 +91,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
   const lastShareRetry = useRef(0);
   const [now, setNow] = useState(() => new Date());
   const [orders, setOrders] = useState([]);
+  const [clock, setClock] = useState(null); // network time vs this PC's clock (server/networkClock.js)
   const [scheduler, setScheduler] = useState(null); // { connected, userId }
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -92,7 +120,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
   const refresh = useCallback(async () => {
     try {
       const r = await api.scheduledOrders.list();
-      setOrders(r.orders ?? []);
+      setOrders(r.orders ?? []); setClock(r.clock ?? null);
       // Safety net: the app re-sends the session when the backend reconnects; if the sender still
       // has none, try again here, but at most once every few minutes.
       const due = Date.now() - lastShareRetry.current > SHARE_RETRY_MS;
@@ -148,7 +176,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
         triggerAt: triggerAt.toISOString(), marketProtection: settings.marketProtection, autoslice: settings.autoslice, tag: settings.tag,
         note: stock ? `Conviction ${stock.convictionScore ?? '—'}` : '',
       });
-      setOrders(r.orders ?? []);
+      setOrders(r.orders ?? []); setClock(r.clock ?? null);
       setScheduler(r.session ?? null);
       setMessage({ type: r.warnings?.length ? 'warn' : 'info', text: [`Scheduled ${r.order.id}: ${summary}.`, ...(r.warnings ?? [])].join(' ') });
     } catch (err) {
@@ -162,7 +190,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
     if (!window.confirm(`Cancel ${o.side} ${o.quantity} ${o.symbol} at ${timeOnly(new Date(o.triggerAt))}?`)) return;
     try {
       const r = await api.scheduledOrders.cancel(o.id);
-      setOrders(r.orders ?? []);
+      setOrders(r.orders ?? []); setClock(r.clock ?? null);
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     }
@@ -171,7 +199,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
   const refreshKite = async (o) => {
     try {
       const r = await api.scheduledOrders.refreshKite(o.id);
-      setOrders(r.orders ?? []);
+      setOrders(r.orders ?? []); setClock(r.clock ?? null);
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     }
@@ -288,6 +316,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
         </div>
       </form>
 
+      <ClockNote clock={clock} />
       <h3 className="report-heading">Waiting ({pending.length})</h3>
       {pending.length ? (
         <div className="table-wrap">

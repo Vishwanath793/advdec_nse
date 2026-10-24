@@ -18,7 +18,7 @@ export function sameOriginOnly(req, res, next) {
 /** `onSession(session|null)` also receives the Kite session (the opening-window collector uses it). */
 export function addOrderRoutes(app, scheduler, { onSession = () => {} } = {}) {
   app.use('/api/orders', sameOriginOnly);
-  const payload = async () => ({ orders: await scheduler.list(), session: scheduler.sessionStatus() });
+  const payload = async () => ({ orders: await scheduler.list(), session: scheduler.sessionStatus(), clock: scheduler.clock?.() ?? null });
   app.get('/api/orders/scheduled', async (_req, res) => {
     try { res.set('Cache-Control', 'no-store').json(await payload()); }
     catch (error) { res.status(500).json({ error: error.message }); }

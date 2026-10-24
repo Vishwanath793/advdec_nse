@@ -152,6 +152,51 @@ test('the real sender worker starts (imports resolve) without contacting Kite', 
   await w.terminate();
 });
 
+// ---- Network time: a timed order leaves at the chosen second of real time, not of this PC's clock ----
+
+/** The PC clock reads `offset` ms behind network time: the PC is `-offset` ms ahead when offset is negative. */
+function pcClockTest({ offset, startAt = '09:14:50' }) {
+  // PC clock = network time − offset (offset = network − PC). Start 10 s before the chosen second.
+  const clock = fakeTime(new Date(+ist(MONDAY, startAt) - offset));
+  const sent = [];
+  const sched = createOrderScheduler({
+    store: memoryStore(), calendar, now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer,
+    clockOffsetMs: () => offset,
+    placeOrder: async () => { sent.push(+clock.now()); return { order_id: 'net-time' }; },
+  });
+  sched.setSession({ apiKey: 'k', accessToken: 't' });
+  return { clock, sent, sched };
+}
+
+test('a PC clock 30 ms ahead: the order leaves at network 09:15:00.000, which is 09:15:00.030 on the PC', async () => {
+  const due = ist(MONDAY, '09:15:00');
+  const { clock, sent, sched } = pcClockTest({ offset: -30 });
+  await sched.add({ ...base, triggerAt: due.toISOString() });
+  await clock.advance(15_000);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0] - 30, +due); // the PC reads 30 ms later than network time at the moment of sending
+  const [o] = await sched.list();
+  assert.deepEqual([o.result.sentAt, o.result.sendDelayMs, o.result.clockOffsetMs], [due.toISOString(), 0, -30]);
+});
+
+test('a PC clock 2 s behind is corrected the same way', async () => {
+  const due = ist(MONDAY, '09:15:00');
+  const { clock, sent, sched } = pcClockTest({ offset: 2000, startAt: '09:14:50' });
+  await sched.add({ ...base, triggerAt: due.toISOString() });
+  await clock.advance(20_000);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0] + 2000, +due);
+  const [o] = await sched.list();
+  assert.equal(o.result.sendDelayMs, 0);
+});
+
+test('the scheduler exposes the network-clock status for the Orders page', () => {
+  const status = { synced: true, offsetMs: -30, syncedAt: '2026-10-24T04:00:00.000Z', server: 'time.windows.com', rttMs: 17, error: null };
+  const sched = createOrderScheduler({ store: memoryStore(), calendar, clockStatus: () => status, placeOrder: async () => ({}) });
+  assert.deepEqual(sched.clock(), status);
+  assert.equal(createOrderScheduler({ store: memoryStore(), calendar, placeOrder: async () => ({}) }).clock(), null);
+});
+
 // ---- Kite's own record of the order ----
 
 /** Kite's history and trades for a market order like JUSTDIAL on 21 Oct 2026 (shape per the Kite Connect docs). */
@@ -209,12 +254,16 @@ test('after placing, Kite\'s record is read at +5 s and again until final; a man
   answer = null;
   await sched.refreshKite(o.id);
   [o] = await sched.list();
-  assert.equal(o.result.kite.error, 'Kite order history request failed');
+  // A failed check keeps the last good record and says when it failed; it never replaces the record with an error.
+  assert.equal(o.result.kite.error, undefined);
+  assert.equal(o.result.kite.status, 'COMPLETE');
+  assert.equal(o.result.kite.checkError, 'Kite order history request failed');
   await assert.rejects(sched.refreshKite('S99'), /No such/);
   sched.setSession(null);
   await sched.refreshKite(o.id);
   [o] = await sched.list();
-  assert.match(o.result.kite.error, /not connected/);
+  assert.match(o.result.kite.checkError, /not connected/);
+  assert.equal(o.result.kite.status, 'COMPLETE');
 });
 
 test('the Kite client reads an order\'s history and trades from the documented endpoints', async () => {

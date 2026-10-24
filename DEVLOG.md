@@ -40,6 +40,65 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-24: Timed orders leave at network time, not the PC clock (Claude Code for vinayakb374, android-app, local commit)
+**Report:** SAGILITY BUY 4032 limit ₹46.40 at 09:15:00 on 23 Oct showed in Kite as placed at 09:14:59.
+
+**What the data shows:**
+- The app's record says the request left at exactly 09:15:00.000 on the PC clock, 0 ms late. That was
+  checked: the worker sends within about 1 ms of the target.
+- So the PC clock was ahead of network time at that moment. On 24 Oct, measured with four NTP exchanges to
+  `time.windows.com`, it was **30–39 ms ahead** and changing from one check to the next. Nothing corrected it: the
+  Windows Time service (`w32time`) is **stopped** and set to manual, and the clock was last synced in the
+  21 Oct check (0.16 s off, sign not verified).
+- A send 30 ms early in real time can reach Kite before 09:15:00.000 and be recorded as 09:14:59 (Kite's times are
+  whole seconds). I could not measure the offset on 23 Oct, so the exact size then is unknown.
+
+**What changed:**
+- `server/networkClock.js`: asks `time.windows.com` and `time.google.com` for the time over NTP (UDP 123), 4 samples
+  each, keeps the fastest. Syncs at start and every 10 minutes (timer unref'd). Rejects replies more than 60 s off.
+  If no server answers, the last good offset is kept and the status says so.
+- `src/core/orderScheduler.js`:
+  - All triggers, checks and timestamps use network time (`netNow`): the PC clock plus the measured offset.
+  - The sender still works on the PC clock; the scheduler converts the target to the PC clock when it hands the order
+    over, and converts the send times back.
+  - Each placed order records `clockOffsetMs` (the offset at the send).
+  - A failed Kite check no longer replaces the last good Kite record. It is kept, with `checkError` and
+    `checkErrorAt` added. This matters here: the SAGILITY record now shows an error, because a later check overwrote
+    the earlier timeline.
+- `server/index.js`, `server/orderRoutes.js`: the clock is started and its status is returned with the orders.
+- `src/OrdersPage.jsx`: a note under the form: "This PC's clock is N ms ahead/behind network time; orders are timed
+  later/earlier by that much". Red above 250 ms. A warning if network time is unavailable. A failed Kite check
+  shows the earlier record and says the check failed.
+
+**Files:** `server/networkClock.js`, `server/networkClock.test.js` (new, added to `npm test`);
+`src/core/orderScheduler.js`, `server/index.js`, `server/orderRoutes.js`, `src/OrdersPage.jsx`;
+`server/orderSender.test.js`, `server/orderRoutes.test.js` (the route now returns `clock`).
+
+**Tests / checks:**
+- `npm test`: 252 pass. `npm run build` and `npx cap sync android` succeed.
+- New: a PC clock 30 ms ahead sends at network 09:15:00.000 (PC 09:15:00.030), recorded as 0 ms late. A PC clock
+  2 s behind is corrected too. The first test was run against the previous scheduler and fails with
+  `actual 1792381499970, expected 1792381500000` (30 ms early), so it catches the reported bug.
+- The NTP client was run once against the live servers from this PC: `time.windows.com`, offset −39 ms,
+  round trip 17 ms.
+- The restarted backend on :3002 reports network time (−31 ms). The Orders page shows the note.
+- The backend was restarted at 10:00 IST on Saturday (no order pending). Restarting clears the in-memory Kite
+  token; the page re-shares it on reconnect.
+
+**Not verified:**
+- A real timed order after this change (the next trading day). The fake-clock tests cover the logic, not a live send.
+- Whether UDP 123 is open on the owner's network. If it isn't, the note says so and orders use the last offset.
+  No offset has been measured yet on 23 Oct, so the size of the early send that day is still unknown.
+- Kite's own record of the SAGILITY order (09:14:59 or not) was not readable: Kite keeps the day's orders only, and
+  the stored record is now an error.
+
+**Next:**
+- The owner should start the Windows Time service so the PC clock itself stays close (as administrator:
+  `Set-Service w32time -StartupType Automatic` then `Start-Service w32time`, or Settings → Time & language → Date &
+  time → Sync now). The app now corrects the clock either way.
+- Check SAGILITY's time in Kite's Orders page (Time column) and compare it with the note on the Orders page.
+- Not touched: a folder `outputs/` (22 Oct analysis files) that is not part of this work and is still uncommitted.
+
 ### 2026-10-21: Auction layer: gap built and orders held measured over order entry only (Claude Code for vinayakb374, android-app, local commit)
 **Why:** the imbalance had already been moved to the close-of-entry reading, but the drift used the last
 reading and orders-held used the last buy share against an average that included readings after the matching
