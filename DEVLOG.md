@@ -125,6 +125,10 @@ for every claim. Full design and setup: [docs/ai-analyst.md](docs/ai-analyst.md)
     model.
 
   Run `npm run ai:eval -- --yes` once a key is set (about 60 paid calls).
+  - First attempt, 26 Oct 16:10 IST, with the owner's key: OpenAI answered the first embedding call with **HTTP 429,
+    no quota left** (account billing), so no question ran and no metrics exist yet.
+  - The key itself was accepted: no 401 came back.
+  - `evalCli.js` now stops with a one-line message instead of a stack trace and a libuv assertion on Windows.
 - Answer quality with a real model. The mock only proves the pipeline. Citation and number checks catch
   fabrication, not every unsupported interpretation.
 - Side effects of running this folder's backend on :3002 today from 15:20 IST (a trading day; no scheduled order
