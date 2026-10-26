@@ -41,6 +41,12 @@ identical (fast-forward). Pushing to `main` also builds and publishes the Androi
 - **Report card**: the daily recorder and how the picks did.
 - **TV research**: Zee Business and CNBC Awaaz transcripts, analysed with the OpenAI API every evening at 19:00.
   **Do not change it** (the owner's rule).
+- **AI Analyst** (added 2026-10-26): read-only research Q&A about an Analyzer snapshot. Numbers come from read-only
+  data functions; explanations come from an allowlisted document index (hybrid RAG); every claim is cited and checked.
+  Off until `AI_PROVIDER` is set (`mock` works offline). Code: `server/ai/`, `src/AiAnalystPage.jsx`,
+  `src/utils/aiContext.js`. Guide: [docs/ai-analyst.md](docs/ai-analyst.md). Rules:
+  - it must never get an order-changing function (a test checks the tool list and the imports);
+  - it must not use the TV research key or settings.
 - **Settings**: Kite login, the NSE schedule, order parameters, and 09:20 trading settings (paper).
 - **Android app** (`android/`, Capacitor): everything except TV research and the PC-only Kite WebSocket
   collector / paper trading. It never places live 09:20 orders.
@@ -331,10 +337,16 @@ server/tradingRoutes.js, server/openingRoutes.js (SSE) ──► OpeningScanner.
 Other modules:
 - `src/core/orderScheduler.js` + `server/orderRoutes.js`: the user's own scheduled real orders. The Kite session
   is handed over through `PUT /api/orders/session`, which also feeds `openingCollector.setSession`.
-- `sameOriginOnly` (in `server/orderRoutes.js`) guards `/api/orders`, `/api/kite`, `/api/opening` and
-  `/api/trading`. The Vite proxy is `{ target, changeOrigin: true, xfwd: true }`.
+- `sameOriginOnly` (in `server/orderRoutes.js`) guards `/api/orders`, `/api/kite`, `/api/opening`, `/api/trading`
+  and `/api/ai`. The Vite proxy is `{ target, changeOrigin: true, xfwd: true }`.
 - `src/platform/web.js` (browser → backend) and `src/platform/android.js` (on the device). On Android,
-  `api.opening` and `api.trading` are `null`.
+  `api.opening`, `api.trading` and `api.ai` are `null`.
+- AI Analyst: `server/ai/service.js` wires these parts:
+  - `snapshots.js` (the live Analyzer snapshot, or a recorded morning through `recorder.dayInputs`);
+  - `data.js` + `tools.js` (seven read-only functions);
+  - `rag/` (index in `.data/ai/index/`, built by `indexWorker.js` in a worker thread);
+  - `analyst.js` (tool loop and checks); `evidence.js` (citations, number checks).
+  It runs without credentials. `npm run ai:eval` runs the evaluation set.
 
 ---
 

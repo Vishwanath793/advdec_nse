@@ -26,6 +26,12 @@
       "port": 5173
     },
     {
+      "name": "backend-3002-ai-mock",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set PORT=3002&& set AI_PROVIDER=mock&& npm run server"],
+      "port": 3002
+    },
+    {
       "name": "frontend-5174",
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "set BACKEND_PORT=3002&& npx vite --port 5174 --strictPort"],

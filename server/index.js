@@ -38,6 +38,9 @@ import { indiaDate } from '../src/core/calendar.js';
 import { parseCSV, rowsToObjects } from '../src/utils/csv.js';
 import { fsStore } from './fsStore.js';
 import { readCalendar } from './tv/calendar.js';
+import { createAiService } from './ai/service.js';
+import { createSnapshotService } from './ai/snapshots.js';
+import { addAiRoutes } from './ai/routes.js';
 import cron from 'node-cron';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)), quiet: true });
@@ -378,6 +381,26 @@ app.post('/api/kite/quote', kiteRoute(['apiKey', 'accessToken', 'instruments'], 
   if (!Array.isArray(b.instruments)) throw new KiteError('instruments must be a list like ["NSE:INFY"].', 400);
   return { quotes: await kite.quote(b) };
 }));
+
+// AI Analyst (read-only research; server/ai). Runs without AI credentials ("AI not configured").
+const aiService = createAiService({
+  store: fsStore(dataDir),
+  dataDir,
+  repoRoot: fileURLToPath(new URL('..', import.meta.url)),
+  calendar,
+  snapshots: createSnapshotService({
+    preopen, recorder, marketContext, priceBands, calendar, store: fsStore(dataDir),
+    contextFor: (date) => marketContext.get({ date }).then(withPreopenBaseline),
+    masterRows: currentMasterRows,
+  }),
+});
+addAiRoutes(app, aiService);
+// Keep the document index current (free keyword index; embeddings only with the mock or when asked).
+// It runs in a worker thread and never in the pre-open or opening window.
+const indexAi = () => aiService.startIndexing({ embed: process.env.AI_PROVIDER === 'mock' || process.env.AI_AUTO_EMBED === '1' })
+  .catch((error) => console.log(`AI index: ${error.message}`));
+setTimeout(indexAi, 30_000).unref();
+cron.schedule('45 19 * * *', indexAi, { timezone: 'Asia/Kolkata', name: 'ai-index' });
 
 app.use(express.static(fileURLToPath(new URL('../dist', import.meta.url))));
 // Errors (e.g. malformed JSON) as JSON, without stack traces.

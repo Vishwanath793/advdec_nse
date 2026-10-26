@@ -229,5 +229,30 @@ export function createRecorder({ store, calendar, context, inputs, now = () => n
     return { recorded: days.length, first: days[0]?.date ?? null, latest: days.at(-1)?.date ?? null, pending, skipped, ...buildReportCard(scored) };
   }
 
-  return { record, status, report, saveConfirmation, confirmation, preopenBaseline };
+  /**
+   * One recorded morning's analysis inputs, as the report card builds them
+   * (read only): { date, rows, masterRows, secList, marketUpdatedAt, fetchedAt, recordedAt, context }.
+   * Null when the day or its master list wasn't recorded. With `withContext: false`
+   * the context (which reads 20 sessions of end-of-day files) is left out.
+   */
+  async function dayInputs(date, { withContext = true } = {}) {
+    const day = await loadDay(date);
+    if (!day?.masterRows) return null;
+    if (withContext && !auctions.has(date)) auctions.set(date, auctionFeatures(await store.read(auctionFile(date))));
+    return {
+      date,
+      rows: day.rows,
+      masterRows: day.masterRows,
+      secList: day.secList,
+      marketUpdatedAt: day.marketUpdatedAt,
+      fetchedAt: day.fetchedAt,
+      recordedAt: day.recordedAt,
+      context: withContext
+        ? { date, history: { stats: await context.statsBefore(date) }, events: day.events, market: day.market ?? null, auction: auctions.get(date) }
+        : null,
+    };
+  }
+  const days = async () => (await readIndex()).days;
+
+  return { record, status, report, saveConfirmation, confirmation, preopenBaseline, dayInputs, days };
 }

@@ -25,6 +25,8 @@ import TvResearchPage from './TvResearchPage.jsx';
 import ReportCardPage from './ReportCardPage.jsx';
 import ConfirmPage from './ConfirmPage.jsx';
 import OrdersPage from './OrdersPage.jsx';
+import AiAnalystPage from './AiAnalystPage.jsx';
+import { analyzerContext } from './utils/aiContext.js';
 import { ModeBadge } from './TradingPanel.jsx';
 import StockScreener from './StockScreener.jsx';
 import { MarketResearch, RESEARCH_COLUMNS, ResearchCells, SectorBreadthCell } from './ResearchColumns.jsx';
@@ -63,6 +65,7 @@ export default function App() {
     if (hash === '#/report') return 'report';
     if (hash === '#/confirm') return 'confirm';
     if (hash === '#/orders') return 'orders';
+    if (hash === '#/ai') return 'ai';
     return 'analyze';
   });
   const [settings, setSettings] = useState(loadSettings);
@@ -108,6 +111,8 @@ export default function App() {
   const stocksSectionRef = useRef(null);
   const [exportMessage, setExportMessage] = useState(null); // { type, text }
   const [orderDraft, setOrderDraft] = useState(null); // prefill for the Orders form (from the Confirm tab)
+  const [aiTarget, setAiTarget] = useState(null); // { symbol } from an Analyzer row's "Ask AI"
+  const clearAiTarget = useCallback(() => setAiTarget(null), []);
   const clearOrderDraft = useCallback(() => setOrderDraft(null), []);
   // Hand the Kite session to the scheduled-order sender. Only set here, never cleared: a browser
   // without a login must not wipe the session another one gave (logout clears it explicitly).
@@ -246,6 +251,26 @@ export default function App() {
     [pmRows, masterRows, priceBands, settings.convictionFactors, marketContext]
   );
 
+  // The Analyzer view by ID and hash, for "Ask AI" (the backend recomputes and checks every hash).
+  const aiAnalyzer = useMemo(() => {
+    if (!api.ai) return { context: null, reason: null };
+    if (dataSource !== 'nse') return { context: null, reason: 'The Analyzer is showing an uploaded file, which stays in this browser. Pick a recorded morning, or load the NSE snapshot.' };
+    if (!pmRows || !contextDate) return { context: null, reason: 'No NSE pre-open snapshot is loaded in the Analyzer yet.' };
+    if (!marketContext && !marketContextError) return { context: null, reason: 'The Analyzer is still loading its market context.' };
+    return {
+      context: analyzerContext({
+        date: contextDate, rows: pmRows, convictionFactors: settings.convictionFactors, screener: settings.screener,
+        context: marketContext, masterRows, priceBands,
+      }),
+      reason: null,
+    };
+  }, [dataSource, pmRows, contextDate, marketContext, marketContextError, masterRows, priceBands, settings.convictionFactors, settings.screener]);
+  const aiSymbols = useMemo(() => (result?.stocks ?? []).map((s) => s.symbol), [result]);
+  const askAi = (symbol) => {
+    setAiTarget({ symbol, at: Date.now() });
+    window.location.hash = '#/ai';
+  };
+
   // NSE pre-open status and snapshots (backend events on the web; on the phone, local).
   useEffect(() => api.preopen.subscribe(
     (data) => {
@@ -285,6 +310,7 @@ export default function App() {
       else if (hash === '#/report') setPage('report');
       else if (hash === '#/confirm') setPage('confirm');
       else if (hash === '#/orders') setPage('orders');
+      else if (hash === '#/ai') setPage('ai');
       else setPage('analyze');
     };
     window.addEventListener('hashchange', onHash);
@@ -1055,6 +1081,9 @@ export default function App() {
         <a href="#/report" className={`nav-link ${page === 'report' ? 'active' : ''}`}>
           Report card
         </a>
+        <a href="#/ai" className={`nav-link ${page === 'ai' ? 'active' : ''}`}>
+          AI Analyst
+        </a>
         {api.features.tvResearch && (
           <a href="#/tv-research" className={`nav-link ${page === 'tv-research' ? 'active' : ''}`}>TV research</a>
         )}
@@ -1067,7 +1096,15 @@ export default function App() {
         </span>
       </nav>
 
-      {page === 'tv-research' ? <TvResearchPage /> : page === 'orders' ? (
+      {page === 'tv-research' ? <TvResearchPage /> : page === 'ai' ? (
+        <AiAnalystPage
+          analyzer={aiAnalyzer}
+          analyzerSymbols={aiSymbols}
+          profile={{ convictionFactors: settings.convictionFactors, screener: settings.screener }}
+          target={aiTarget}
+          onTargetUsed={clearAiTarget}
+        />
+      ) : page === 'orders' ? (
         <OrdersPage
           stocks={result?.stocks}
           settings={settings}
@@ -1633,6 +1670,11 @@ export default function App() {
                       <td className="mono symbol-cell">
                         {s.symbol}
                         {renderFlags(s)}
+                        {aiAnalyzer.context && (
+                          <button type="button" className="ask-ai-btn" onClick={() => askAi(s.symbol)} title={`Ask the AI Analyst about ${s.symbol} on this snapshot`}>
+                            Ask AI
+                          </button>
+                        )}
                       </td>
                       <td className="wrap-cell company-cell">{s.company}</td>
                       <td className="wrap-cell sector-cell">{s.sector}</td>

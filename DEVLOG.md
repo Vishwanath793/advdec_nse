@@ -40,6 +40,107 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-26: AI Analyst tab: read-only, grounded Q&A with structured data and RAG (Claude Code for vinayakb374, android-app, local commit)
+**What changed:** a new **AI Analyst** tab and an **Ask AI** button on each Analyzer row. It answers questions
+about one snapshot (why a conviction score, why a filter pass/fail, comparisons, exact numeric screens, missing or
+stale data, similar recorded setups, breadth) with supporting, contradicting and missing evidence and a source card
+for every claim. Full design and setup: [docs/ai-analyst.md](docs/ai-analyst.md).
+- **Read-only by construction:** the model can call only seven read-only functions (`server/ai/tools.js`, strict
+  schemas plus server-side validation, bounded results). Nothing in `server/ai` imports the scheduler, the Kite
+  client, the trading desk or the paper broker; a test checks the sources. Unknown calls (e.g. `placeOrder`) are refused and reported.
+- **Exact analysis:** the browser sends the snapshot ID (date + hash of the pre-open rows), the normalised factor
+  and Stock filter profile with its hash, and fingerprints of the context and inputs (`src/utils/aiContext.js`).
+  The backend recomputes them and refuses a mismatch ("reload the Analyzer"). The context fingerprint counts only
+  inputs that can change the numbers: GIFT Nifty, VIX and FII/DII only when their factor is on, and event contents,
+  not their re-fetch time. Found in the browser: GIFT Nifty is re-read every 5 min in market hours, so the first
+  version refused questions after a few minutes. Recorded mornings are rebuilt as the report card does
+  (`recorder.dayInputs`, a new read-only accessor).
+- **Numbers come from the data functions** (`server/ai/data.js`, the same `analyze`/`screenStocks`), never the model.
+  The server drops citations that weren't supplied and claims left without a source. It checks every stated number
+  against the cited evidence and flags probability or promise wording. It strips confidence percentages, and
+  treats an uncited answer as "The available recorded data is insufficient to answer this."
+- **RAG** (`server/ai/rag/`): an allowlist only. The sources are the READMEs, CLAUDE.md, DEVLOG.md,
+  docs/ai-analyst.md and the Analyzer review; a factor glossary generated from the code; approved notes in
+  `.data/ai/notes/`; a per-day morning summary and a retrospective outcome summary; and optional TV research
+  summaries (`AI_TV_RESEARCH=1`). Secrets are redacted.
+  - Chunks split by heading and paragraph, with metadata and a content hash; indexing is incremental.
+  - Vectors are stored per embedding model and never mixed.
+  - Retrieval is hybrid (exact symbol/date, BM25, vectors) merged by reciprocal rank fusion, de-duplicated, bounded by
+    chunks and tokens, and labels keyword-only fallback.
+  - The index lives in `.data/ai/index/` and is built in a **worker thread**. Indexing never runs 08:55–09:35 IST on
+    trading days; questions pause 09:13–09:31.
+- **Dates:** "As known" (default) uses only evidence available by the cutoff and excludes unknown availability.
+  "Retrospective" may use later outcomes, shown only in a separate section. Similar setups are picked from morning
+  data only; a test changes the outcomes and checks the picks don't change.
+- **Providers** (`server/ai/providers/`): an OpenAI adapter with its own key and model (`AI_API_KEY`, `AI_MODEL`,
+  default `gpt-6.1-sol`; `AI_EMBEDDING_MODEL`, default `text-embedding-3-small`; names checked on OpenAI's model and
+  embeddings pages today). It uses the Responses API with strict JSON schema, `store: false` and no SDK retries.
+  The offline **mock** (`AI_PROVIDER=mock`) is free.
+  - A per-day usage ledger and budget live in `.data/ai/usage-*.json`; a cost is estimated only if `AI_PRICE_*` is set.
+  - Limits: timeout, concurrency, cancellation on disconnect, and an answer cache for as-known questions.
+  - TV research code and settings are untouched.
+- **UI** (`src/AiAnalystPage.jsx`):
+  - choices: snapshot (Analyzer view or a recorded morning), mode, IST cutoff, up to 5 stocks;
+  - 11 suggested questions; Cancel, Clear answers, New conversation; a "Read-only research" label;
+  - answers as plain text (no HTML) with tap-to-open [E#]/[D#] citations and source cards (excerpt, exchange,
+    fetched, available and indexed times);
+  - coverage and stale notes, and an index/usage panel with "Update index (free)" and "Embed N passages (about T tokens)".
+  - Android: `api.ai = null`, so the tab says it's unavailable and no key is in the APK.
+
+**Files:**
+- New: `server/ai/` (config, errors, usage, data, tools, evidence, analyst, snapshots, service, routes, indexWorker,
+  eval, evalCli, `providers/` openai, mock and index, `rag/` text, embeddings, indexStore, indexer, retrieve, sources,
+  glossary, summaries); `src/utils/aiContext.js`, `src/AiAnalystPage.jsx`, `docs/ai-analyst.md`.
+- New tests and fixtures: `server/aiAnalyst.test.js`, `server/aiEval.test.js`, `server/aiService.test.js` (all in
+  `npm test`), `server/fixtures/aiFixture.js`, `server/fixtures/ai-eval.json` (22 questions).
+- Changed: `server/index.js`, `src/core/recorder.js` (adds `dayInputs`/`days`, read only), `src/App.jsx`,
+  `src/platform/web.js`, `src/platform/android.js`, `src/styles.css`, `package.json` (tests, `ai:eval`),
+  `.env.example`, `README.md`, `android/README.md`, `.claude/launch.json` (a mock-mode backend config), `CLAUDE.md`.
+
+**Tests / checks:**
+- `npm test`: 280 pass (28 new). `npm run build` and `npx cap sync android` succeed.
+- Covered:
+  - exact symbol/date retrieval; numeric screens and comparisons equal to `analyze()`;
+  - hybrid retrieval and de-duplication; incremental indexing; a change of embedding model;
+  - missing and stale evidence; the as-known cutoff; outcomes kept out of the setup selection;
+  - snapshot, profile and context mismatches; invalid arguments and path traversal (also over HTTP);
+  - prompt injection in a document plus a `placeOrder` call; fabricated citations and numbers;
+  - OpenAI request shape and error mapping (timeout, 429 rate vs quota, 401) with a fake client;
+  - missing key; cancellation; daily budget; concurrency; the quiet window;
+  - the worker thread building the index from an allowlist (a planted `.env` and an unapproved note are not indexed).
+- Evaluation (mock): retrieval, supported numbers, citations, abstention, required facts and read-only are all 100%
+  over 22 cases. It caught a bug in the mock's "between 1 and 3" parsing.
+- Real data, offline: 17 documents and 189 passages indexed in 34 ms.
+- Browser, backend on :3002 with `AI_PROVIDER=mock`, today's live snapshot:
+  - "Ask AI" on an Analyzer row opens the tab with that stock;
+  - answers show supporting evidence, missing data and sources; a citation opens its card;
+  - at 375 px there is no sideways scroll;
+  - the stale-context refusal was seen and then fixed, as described above.
+
+**Not verified:**
+- **No call to a real provider was made** (no `AI_API_KEY` on this PC). The OpenAI adapter is tested only with a
+  fake client. Not yet confirmed live:
+  - that `gpt-6.1-sol` accepts the strict JSON schema together with function tools;
+  - that passing back only `function_call` items, without reasoning items, under `store: false` works for this
+    model.
+
+  Run `npm run ai:eval -- --yes` once a key is set (about 60 paid calls).
+- Answer quality with a real model. The mock only proves the pipeline. Citation and number checks catch
+  fabrication, not every unsupported interpretation.
+- Side effects of running this folder's backend on :3002 today from 15:20 IST (a trading day; no scheduled order
+  was pending, and no Kite session was shared):
+  - it ran its normal start-up jobs: today's pre-open was recorded to `.data/recorded/2026-10-26.json`;
+  - the 09:30 auto-export, which saves once after a late start, wrote `Downloads/Stocks_2026-10-26_1525.xlsx`
+    (the 09:30 file from this morning's other backend is untouched);
+  - a late 9:20 confirmation reading was saved (`recorded/confirm-2026-10-26.json`, 15:24) when the Confirm page was
+    opened in the shared browser pane.
+
+  The backend was stopped afterwards.
+
+**Next:** set `AI_PROVIDER=openai` and `AI_API_KEY` in `.env`, restart, click "Embed N passages" once, and run the
+evaluation against the real model. Approved research notes go in `.data/ai/notes/*.md` with `approved: true` and
+`availableAt:` in the front matter.
+
 ### 2026-10-24: Timed orders leave at network time, not the PC clock (Claude Code for vinayakb374, android-app, local commit)
 **Report:** SAGILITY BUY 4032 limit ₹46.40 at 09:15:00 on 23 Oct showed in Kite as placed at 09:14:59.
 

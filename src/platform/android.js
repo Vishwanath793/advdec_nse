@@ -219,6 +219,8 @@ export function createAndroidApi() {
       status: () => recorder.status(),
       get: (factorSettings) => recorder.report(factorSettings),
     },
+    // The AI Analyst needs the PC backend (the provider key is kept there, never in the APK).
+    ai: null,
     kite,
   };
 }

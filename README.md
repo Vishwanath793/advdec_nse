@@ -192,6 +192,24 @@ For the current date, Saturday 12 September 2026, the next eligible run is **Tue
 
 Implementation references: [OpenAI conversation state](https://developers.openai.com/api/docs/guides/conversation-state), [GPT-4.1 model](https://developers.openai.com/api/docs/models/gpt-4.1), [Playwright downloads](https://playwright.dev/docs/downloads). Prompt constants are in `server/tv/prompts.js`.
 
+## AI Analyst (read-only research)
+
+Open **AI Analyst** in the navigation, or press **Ask AI** next to a stock in the Analyzer's stocks table (it opens
+the tab with that stock on the exact Analyzer snapshot and settings). It explains conviction scores and filter
+results, compares stocks, screens on exact numbers, lists missing or stale data and summarises recorded mornings,
+with a source card for every claim. Numbers come from the app's own analysis functions; explanations come from an
+allowlisted document index (hybrid keyword + vector search). It cannot place, change or cancel orders or change
+settings, and its scores are rankings, not win probabilities.
+
+- Off until configured: set `AI_PROVIDER=openai` and `AI_API_KEY` in `.env` (separate from TV research's key), or
+  `AI_PROVIDER=mock` to try it offline at no cost. Restart the backend.
+- "As known at the selected time" leaves out anything published after the cutoff; "Retrospective research" may show
+  later outcomes, labelled as such.
+- Questions pause 09:13–09:31 IST on trading days; indexing runs in a worker thread and never 08:55–09:35.
+- Not available in the Android app (no provider key is ever put in the APK).
+
+Full setup, limits, costs and the evaluation set: [docs/ai-analyst.md](docs/ai-analyst.md).
+
 ## Android app
 
 A standalone Android version (everything except TV research runs on the phone, no PC needed) lives in

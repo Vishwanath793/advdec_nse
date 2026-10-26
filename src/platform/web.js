@@ -123,6 +123,21 @@ export function createWebApi() {
       status: () => json(fetch('/api/report-card/status')),
       get: (factorSettings) => json(post('/api/report-card', { factorSettings })),
     },
+    /** AI Analyst (read-only research on the backend; the provider key stays there). */
+    ai: {
+      status: () => json(fetch('/api/ai/status')),
+      snapshots: () => json(fetch('/api/ai/snapshots')),
+      /** Errors carry `code` (e.g. 'stale', 'quiet', 'not_configured'); `signal` cancels. */
+      async ask(body, signal) {
+        const response = await fetch('/api/ai/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw Object.assign(new Error(payload.error || `Request failed (HTTP ${response.status}).`), { code: payload.code ?? null });
+        return payload;
+      },
+      source: (chunkId) => json(fetch(`/api/ai/source/${encodeURIComponent(chunkId)}`)),
+      index: (embed) => json(post('/api/ai/index', { embed })),
+      cancelIndex: () => json(post('/api/ai/index/cancel', {})),
+    },
     kite: {
       createSession: async (body) => (await json(post('/api/kite/session', body))).session,
       positions: async (body) => {

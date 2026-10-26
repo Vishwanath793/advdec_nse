@@ -20,6 +20,9 @@ points to the PC for the trading panel.
 **Not included: TV research.** It drives a desktop browser through YouTube caption downloads and
 calls the OpenAI API, so it stays on the PC version.
 
+**Not available: the AI Analyst.** It runs on the PC backend, which holds the provider key; the phone has no secure
+backend connection, so the tab says it is unavailable. No AI key is ever put in the APK.
+
 ## Install
 
 1. On your phone, open **https://github.com/Vishwanath793/advdec_nse/releases/tag/android-latest**
