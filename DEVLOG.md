@@ -59,7 +59,8 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 - npm run build and npx cap sync android pass.
 - Restarted the :3002 backend at 18:03 IST; no scheduled order was pending.
 - The simulated replay matched the earlier run (5 trades, ₹189.25 net), and ORBDN's stop shows the approximate
-  label on the Orders card. No console errors.
+  label on the Orders card. The only console errors were 3 `ERR_CONNECTION_RESET` from the backend restart while
+  the page was open.
 
 **Not verified:** Kite's daily candle as the previous high/low in a live morning (the replay has no Kite history).
 
