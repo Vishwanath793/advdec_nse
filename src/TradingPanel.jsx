@@ -191,12 +191,37 @@ const GAP_FIELDS = [
   ['tightenBufferAtr', '09:20 buffer below the range (× ATR)'], ['timeStopR', 'Time stop: exit under (R)'], ['trailAtr', 'ATR trail (× ATR)'],
 ];
 
+/** The LIVE gap-exit switch (phase 2); the daily typed arming is on the Orders page's gap card. */
+function LiveGapSwitch() {
+  const [v, setV] = useState(null);
+  const [msg, setMsg] = useState(null);
+  useEffect(() => { api.trading?.live?.state().then(setV).catch((e) => setMsg(e.message)); }, []);
+  if (!api.trading?.live || !v) return msg ? <p className="hint">{msg}</p> : null;
+  const toggle = async (enabled) => {
+    if (enabled && !window.confirm('Turn on LIVE gap exits? Scheduled 09:15 market orders that opt in will get real SL-M and target orders at Kite, on the days you arm it with the typed confirmation.')) return;
+    try { setV(await api.trading.live.setEnabled(enabled)); setMsg(null); } catch (e) { setMsg(e.message); }
+  };
+  return (
+    <div className="field">
+      <label><input type="checkbox" checked={v.enabled} onChange={(e) => toggle(e.target.checked)} /> <strong>LIVE gap exits</strong> <span className="badge mode-badge mode-live">LIVE</span></label>
+      <p className="hint">
+        For your own scheduled 09:15 market orders that tick “live gap exits”: after the fill, a real SL-M rests at Kite and the targets are sent as
+        LIMIT IOC orders, with the same rules as the paper gap entry. It also needs a typed confirmation each trading day (Orders page), a valid
+        Kite login and your whitelisted static IP. Unarmed, an opted-in order is not sent at all. Never from the phone.
+        {v.enabled ? (v.armed ? ` Armed for ${v.armedFor}.` : ' Not armed today.') : ''}
+      </p>
+      {msg && <p className="hint">{msg}</p>}
+    </div>
+  );
+}
+
 /** The 9:15 gap-entry settings (utils/gapExits.js), inside the trading settings. */
 function GapExitFields({ g, set }) {
   const field = (k, v) => set({ ...g, [k]: v });
   return (
     <>
-      <h4>9:15 gap entry (paper)</h4>
+      <h4>9:15 gap entry (paper; live exits below)</h4>
+      <LiveGapSwitch />
       <p className="hint">
         Market entry at 09:15 for the stocks on the Orders page&apos;s gap list. It always enters; the gap (in ATR) sets the size.
         These are untested starting values: the report by gap type is how to tune them.

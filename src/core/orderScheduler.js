@@ -1,5 +1,6 @@
-import { indiaDate, marketDay } from './calendar.js';
+import { indiaDate, istInstant, marketDay } from './calendar.js';
 import { tickSize } from '../utils/analysis.js';
+import { liveTag } from '../utils/liveOrders.js';
 
 /**
  * Time-triggered orders: "BUY 10 INFY at market at 09:15:00". Kite has no
@@ -91,14 +92,25 @@ export function validateScheduledOrder(input, now, calendar) {
   if (product === 'MIS' && time >= '15:20:00') warnings.push('MIS positions are squared off from 15:20; a new MIS order then may be rejected.');
 
   const marketProtection = Number(input?.marketProtection ?? -1);
+  // LIVE gap exits (the 9:15 gap entry, phase 2): only a 09:15 MARKET MIS order on NSE.
+  const exits = input?.exits === 'gap' ? 'gap' : null;
+  if (exits) {
+    if (orderType !== 'MARKET' || product !== 'MIS' || exchange !== 'NSE' || time < '09:15:00' || time >= '09:16:00') {
+      throw new Error('Live gap exits need a MARKET, MIS, NSE order sent between 09:15:00 and 09:15:59.');
+    }
+    warnings.push('Live gap exits: real stop and target orders follow this order at Kite. It is sent only if live exits are armed that day (Settings switch + the typed confirmation).');
+  }
+  const userTag = typeof input?.tag === 'string' ? input.tag.replace(/[^A-Za-z0-9]/g, '').slice(0, 20) : '';
   return {
     order: {
       symbol, side, quantity, orderType, price, product, exchange,
       triggerAt: triggerAt.toISOString(),
       marketProtection: Number.isFinite(marketProtection) ? marketProtection : -1,
       autoslice: input?.autoslice !== false,
-      tag: typeof input?.tag === 'string' ? input.tag.replace(/[^A-Za-z0-9]/g, '').slice(0, 20) : '',
+      // An opted-in order always has a tag, so it can be found in Kite's order book after an unknown outcome.
+      tag: exits && !userTag ? liveTag(day, symbol, 'entry', 1) : userTag,
       note: typeof input?.note === 'string' ? input.note.slice(0, 200) : '',
+      ...(exits ? { exits, gapAutoSize: input?.gapAutoSize === true } : {}),
     },
     warnings,
   };
@@ -128,7 +140,7 @@ export function kiteOrderFor(o) {
     exchange: o.exchange,
     tradingsymbol: o.symbol,
     transaction_type: o.side,
-    quantity: o.quantity,
+    quantity: o.sendQuantity ?? o.quantity,
     product: o.product,
     order_type: o.orderType,
     validity: 'DAY',
@@ -238,6 +250,8 @@ export function createOrderScheduler({
   setTimer = setTimeout, clearTimer = clearTimeout, sender = null, orderDetails = null,
   // Network time minus this PC's clock, in ms (server/networkClock.js). Orders are timed on network time.
   clockOffsetMs = () => 0, clockStatus = () => null,
+  // LIVE gap exits (PC backend only): { armed(date), size(order) → { quantity, plan, reason }, onPlaced(order) }.
+  gapExits = null,
 }) {
   /** Network time as a Date: the scheduler's clock (every trigger, check and timestamp uses it). */
   const netNow = () => new Date(+now() + clockOffsetMs());
@@ -270,7 +284,27 @@ export function createOrderScheduler({
   }
 
   /** Wake PREARM_MS before the order's time (see fire). */
+  const sizeTimers = new Map();
+  /** At 09:14:00, an opted-in order with auto-size gets min(entered, gap plan) shares (never more than entered). */
+  function armSize(o) {
+    clearTimer(sizeTimers.get(o.id));
+    if (o.status !== 'scheduled' || !o.gapAutoSize || !gapExits?.size || o.sizing) return;
+    const at = +istInstant(indiaDate(new Date(o.triggerAt)), '09:14') - netNow();
+    sizeTimers.set(o.id, setTimer(() => { sizeNow(o.id).catch(() => {}); }, Math.max(0, Math.min(at, MAX_TIMER_MS))));
+  }
+  async function sizeNow(id) {
+    const o = orders.find((x) => x.id === id);
+    if (!o || o.status !== 'scheduled' || o.sizing) return;
+    const r = await gapExits.size(o).catch((error) => ({ quantity: null, reason: `no gap plan: ${error.message}` }));
+    const sent = r?.quantity > 0 ? Math.min(o.quantity, r.quantity) : o.quantity;
+    await update(o, {
+      sendQuantity: sent,
+      sizing: { entered: o.quantity, plan: r?.quantity ?? null, sent, reason: r?.quantity > 0 ? (r.quantity < o.quantity ? `gap plan: ${r.reason}` : 'gap plan allows the entered quantity') : (r?.reason ?? 'no gap plan: the entered quantity'), at: netNow().toISOString() },
+    });
+  }
+
   function arm(o) {
+    armSize(o);
     clearTimer(timers.get(o.id));
     if (o.status !== 'scheduled') return;
     const delay = new Date(o.triggerAt) - PREARM_MS - netNow();
@@ -296,6 +330,12 @@ export function createOrderScheduler({
       await update(o, { status: 'failed', result: { error: 'Kite was not connected at the trigger time. Log in to Kite in Settings (and keep the app open so it can hand the session over).' } });
       return o;
     }
+    // An opted-in order goes only with its live exits armed: never a live entry without them.
+    if (o.exits === 'gap' && !gapExits?.armed?.(indiaDate(due))) {
+      await update(o, { status: 'failed', result: { error: 'Not sent: live gap exits are not armed today (Settings: the switch and today\'s typed confirmation). Nothing reached Kite.' } });
+      return o;
+    }
+    if (o.gapAutoSize && !o.sizing) await sizeNow(o.id).catch(() => {});
     await update(o, { status: 'placing', result: { armedAt: t.toISOString() } });
     // The sender works on the PC clock: give it the target on that clock, and convert its times back.
     const offset = clockOffsetMs();
@@ -314,6 +354,7 @@ export function createOrderScheduler({
         },
       });
       if (r.orderId) scheduleKiteCheck(o, 0);
+      if (o.exits === 'gap') { try { await gapExits?.onPlaced?.(o); } catch { /* the live exits report their own errors */ } }
     } else {
       const expired = r.status === 403 || r.errorType === 'TokenException';
       await update(o, {
@@ -390,6 +431,7 @@ export function createOrderScheduler({
     async add(input) {
       await load();
       const { order, warnings } = validateScheduledOrder(input, netNow(), calendar);
+      if (order.exits && !gapExits) throw new Error('Live gap exits are only available in the PC backend (never from the phone).');
       const duplicate = orders.find((o) => o.status === 'scheduled' && o.symbol === order.symbol && o.side === order.side
         && o.quantity === order.quantity && o.triggerAt === order.triggerAt && o.orderType === order.orderType && o.price === order.price);
       if (duplicate) throw new Error(`The same order is already scheduled (${duplicate.id}).`);
@@ -424,7 +466,7 @@ export function createOrderScheduler({
     clock: () => clockStatus(),
     fire, // exposed for tests
     stop() {
-      for (const t of [...timers.values(), ...kiteTimers.values()]) clearTimer(t);
+      for (const t of [...timers.values(), ...kiteTimers.values(), ...sizeTimers.values()]) clearTimer(t);
       timers.clear();
       kiteTimers.clear();
     },

@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { sameOriginOnly } from './orderRoutes.js';
+import { indiaDate, marketDay } from '../src/core/calendar.js';
+import { liveConfirmText } from '../src/utils/liveOrders.js';
 import { cleanTradingSettings } from '../src/core/tradingDesk.js';
 import { buildXlsx } from '../src/utils/exportStocks.js';
 import { cleanGapList, gapReportCsv, gapReportSheets, gapSummary, gapTradeRows } from '../src/utils/gapExits.js';
@@ -12,12 +14,18 @@ import { cleanGapList, gapReportCsv, gapReportSheets, gapSummary, gapTradeRows }
  *   POST /api/trading/kill        { on, ledger }    kill switch (on: cancel entries, close positions)
  *   POST /api/trading/close-all   { ledger }        square off every paper position now
  *   GET  /api/trading/log/:date                     the day's append-only event log (NDJSON)
+ * LIVE gap exits (phase 2; only for scheduled 09:15 orders that opted in):
+ *   GET  /api/trading/live                          switch, armed today, positions, mismatches
+ *   PUT  /api/trading/live         { enabled }      the Settings switch (turning it off also disarms)
+ *   POST /api/trading/live/arm     { confirm }      today's typed confirmation ("LIVE YYYY-MM-DD")
+ *   POST /api/trading/live/disarm                   stop managing today (orders already at Kite stay)
+ *   POST /api/trading/live/kill                     exit every live gap position now
  * 9:15 gap entries (paper):
  *   GET/PUT /api/trading/gap-list                   { list: [{ symbol, side }], shadowScheduled }
  *   GET  /api/trading/gap-plan/:symbol?side=        the gap plan for one stock now
  *   GET  /api/trading/gap-report[?format=xlsx|csv]      closed gap entries from every saved day, by gap type
  */
-export function addTradingRoutes(app, desk, { settingsFile, log, gapListFile = null, paperDir = null }) {
+export function addTradingRoutes(app, desk, { settingsFile, log, gapListFile = null, paperDir = null, live = null, liveFile = null, calendar = null }) {
   app.use('/api/trading', sameOriginOnly);
   const ledgerOf = (req) => ((req.query.ledger ?? req.body?.ledger) === 'replay' ? 'replay' : 'day');
   app.get('/api/trading/state', (req, res) => res.set('Cache-Control', 'no-store').json(desk.view(ledgerOf(req))));
@@ -43,6 +51,7 @@ export function addTradingRoutes(app, desk, { settingsFile, log, gapListFile = n
     res.set({ 'Content-Type': 'application/x-ndjson', 'Content-Disposition': `attachment; filename="paper-${req.params.date}.ndjson"` }).send(text);
   });
 
+  if (live && liveFile) addLiveRoutes(app, live, { liveFile, calendar });
   if (!gapListFile) return;
   const readGapList = () => { try { return cleanGapList(JSON.parse(readFileSync(gapListFile, 'utf8'))); } catch { return cleanGapList({}); } };
   app.get('/api/trading/gap-list', (req, res) => res.set('Cache-Control', 'no-store').json(readGapList()));
@@ -74,5 +83,31 @@ export function addTradingRoutes(app, desk, { settingsFile, log, gapListFile = n
       return res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Content-Disposition': 'attachment; filename="gap-entries.xlsx"' }).send(Buffer.from(bytes));
     }
     res.set('Cache-Control', 'no-store').json({ rows, summary });
+  });
+}
+
+/** The LIVE gap-exit switch and the daily typed confirmation (.data/gap-live.json: { enabled, armedFor }). */
+function addLiveRoutes(app, live, { liveFile, calendar }) {
+  const read = () => { try { return JSON.parse(readFileSync(liveFile, 'utf8')); } catch { return {}; } };
+  const write = (v) => writeFileSync(liveFile, JSON.stringify(v, null, 2));
+  const today = () => indiaDate(new Date());
+  app.get('/api/trading/live', (req, res) => res.set('Cache-Control', 'no-store').json(live.view()));
+  app.put('/api/trading/live', (req, res) => {
+    const enabled = req.body?.enabled === true;
+    write({ ...read(), enabled, ...(enabled ? {} : { armedFor: null }) });
+    res.json(live.view());
+  });
+  app.post('/api/trading/live/arm', (req, res) => {
+    const s = read();
+    const date = today();
+    if (!s.enabled) return res.status(409).json({ error: 'Turn on live gap exits first.' });
+    if (calendar && !marketDay(date, calendar).open) return res.status(409).json({ error: `${date} is not a trading day.` });
+    if (String(req.body?.confirm ?? '').trim() !== liveConfirmText(date)) return res.status(400).json({ error: `Type exactly: ${liveConfirmText(date)}` });
+    write({ ...s, armedFor: date, armedAt: new Date().toISOString() });
+    res.json(live.view());
+  });
+  app.post('/api/trading/live/disarm', (req, res) => { write({ ...read(), armedFor: null }); res.json(live.view()); });
+  app.post('/api/trading/live/kill', async (req, res) => {
+    try { res.json(await live.kill()); } catch (error) { res.status(500).json({ error: error.message }); }
   });
 }

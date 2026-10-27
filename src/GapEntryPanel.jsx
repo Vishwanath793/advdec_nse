@@ -199,7 +199,87 @@ export function GapEntryPanel() {
         </div>
       )}
       <GapReport />
+      {ledger === 'day' && <LiveGapExits />}
     </section>
+  );
+}
+
+/** The live state, from the scanner's SSE payload when open, else polled. */
+function useLiveView() {
+  const [v, setV] = useState(null);
+  useEffect(() => {
+    if (!api.trading?.live) return undefined;
+    let alive = true;
+    const load = () => api.trading.live.state().then((x) => alive && setV(x)).catch(() => {});
+    load();
+    const unsubscribe = api.opening?.subscribe((d) => { if (alive && d.gapLive) setV(d.gapLive); }, () => {});
+    const t = setInterval(load, 10_000);
+    return () => { alive = false; clearInterval(t); unsubscribe?.(); };
+  }, []);
+  return [v, setV];
+}
+
+/**
+ * LIVE gap exits (phase 2): today's arming and the opted-in orders' state at Kite.
+ * Real orders: an SL-M rests at Kite after the fill; targets are LIMIT IOC orders at the touch.
+ */
+function LiveGapExits() {
+  const [v, setV] = useLiveView();
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState(null);
+  if (!v) return null;
+  const act = async (fn) => { try { setV(await fn()); setError(null); } catch (e) { setError(e.message); } };
+  const positions = v.positions ?? [];
+  return (
+    <div className="live-exits">
+      <h4>Live gap exits <span className="badge mode-badge mode-live">LIVE</span></h4>
+      {!v.enabled ? (
+        <p className="hint">Off. Turn it on in Settings → 9:15 gap entry; then arm it here each trading day. Only scheduled 09:15 market orders that ticked “live gap exits” are managed.</p>
+      ) : v.armed ? (
+        <div className="alert warn">
+          <strong>Armed for {v.armedFor}.</strong> Opted-in 09:15 orders are sent, and after each fill a real SL-M rests at Kite; targets go as LIMIT IOC orders at the touch.
+          Kite accepts orders only from your whitelisted static IP. A stop can fill worse than its trigger, or not at all at a circuit.{' '}
+          <button type="button" className="btn ghost" onClick={() => act(api.trading.live.disarm)}>Disarm</button>
+        </div>
+      ) : (
+        <form className="gap-check" onSubmit={(e) => { e.preventDefault(); act(() => api.trading.live.arm(confirm)); }}>
+          <span className="hint">Not armed today: opted-in orders will <strong>not</strong> be sent. To arm, type <span className="mono">{v.confirmText}</span></span>
+          <input value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder={v.confirmText} aria-label="Typed confirmation" />
+          <button type="submit" className="btn danger">Arm live gap exits for today</button>
+        </form>
+      )}
+      {!v.session && v.enabled && <p className="dec-text">No Kite session in the backend: log in to Kite before 09:15.</p>}
+      {error && <p className="dec-text">{error}</p>}
+      {v.mismatches?.length > 0 && <div className="alert warn"><strong>Kite differs from the log (Kite wins):</strong> {v.mismatches.map((m) => m.message).join(' · ')}</div>}
+      {positions.length > 0 && (
+        <div className="table-wrap">
+          <table className="stock-table">
+            <thead><tr><th>Order</th><th>Status</th><th className="num">Filled</th><th className="num">Avg</th><th className="num">Open qty</th><th>SL-M at Kite</th><th className="num">T1</th><th className="num">T2</th><th>Exits</th><th>Notes</th></tr></thead>
+            <tbody>
+              {positions.map((p) => (
+                <tr key={p.id}>
+                  <td className="mono">{p.side} {p.symbol} <span className="hint">{p.id}</span></td>
+                  <td>{p.status}{p.t1Done && p.status === 'OPEN' ? ' (T1 done)' : ''}{p.closeReason ? ` — ${p.closeReason}` : ''}</td>
+                  <td className="num">{p.entry.filled}/{p.entry.qty}</td>
+                  <td className="num">{f2(p.entry.avg)}</td>
+                  <td className="num">{p.qty}</td>
+                  <td title={p.stop?.reason ?? ''}>{p.stop ? `${p.stop.qty} @ ${f2(p.stop.trigger)} (${p.stop.status})` : p.placing?.length ? 'sending…' : '—'}</td>
+                  <td className="num">{f2(p.levels?.t1)}</td>
+                  <td className="num">{p.levels ? (p.levels.t2 != null ? f2(p.levels.t2) : <span className="hint" title={TRAIL_TITLE}>trail</span>) : '—'}</td>
+                  <td>{p.exits.map((x) => `${x.qty} @ ${f2(x.price)} ${x.code} ${time(x.at)}`).join('; ') || '—'}</td>
+                  <td className={p.status === 'HALTED' ? 'dec-text' : 'hint'}>{p.flags.map((x) => x.message).join(' · ')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {positions.some((p) => p.status === 'OPEN' || p.status === 'ENTRY') && (
+        <button type="button" className="btn danger" onClick={() => { if (window.confirm('Exit every live gap position now at market (the SL-M is cancelled first)?')) act(api.trading.live.kill); }}>
+          Exit all live gap positions now
+        </button>
+      )}
+    </div>
   );
 }
 

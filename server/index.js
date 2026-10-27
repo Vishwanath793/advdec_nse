@@ -32,7 +32,8 @@ import { createTickLog } from './tickLog.js';
 import { addOpeningRoutes } from './openingRoutes.js';
 import { createEventLog } from './eventLog.js';
 import { addTradingRoutes } from './tradingRoutes.js';
-import { createTradingDesk } from '../src/core/tradingDesk.js';
+import { cleanTradingSettings, createTradingDesk } from '../src/core/tradingDesk.js';
+import { createGapLiveExits } from '../src/core/gapLiveExits.js';
 import { addOrderRoutes, sameOriginOnly } from './orderRoutes.js';
 import { indiaDate, istInstant } from '../src/core/calendar.js';
 import { gapEntriesFor } from '../src/utils/gapExits.js';
@@ -287,6 +288,15 @@ const orderScheduler = createOrderScheduler({
   store: fsStore(fileURLToPath(new URL('../.data', import.meta.url))),
   calendar,
   placeOrder: (args) => kite.placeOrder(args),
+  // LIVE gap exits for opted-in 09:15 orders (sent only when armed; sized at 09:14 if asked; then followed at Kite).
+  gapExits: {
+    armed: () => gapLive.armed(),
+    size: async (o) => {
+      const p = await tradingDesk.gapPlanFor(o.symbol, o.side);
+      return p?.ok ? { quantity: p.qty, reason: `${p.type} gap ${p.g} ATR, size ×${p.factor}${p.factorReasons.length ? ` (${p.factorReasons.join('; ')})` : ''}` } : null;
+    },
+    onPlaced: (o) => gapLive.track(o),
+  },
   clockOffsetMs: () => networkClock.offsetMs(),
   clockStatus: () => networkClock.status(),
   // Sent from a worker thread at the exact time, away from the opening's tick flood.
@@ -298,7 +308,7 @@ const orderScheduler = createOrderScheduler({
   },
 });
 orderScheduler.load().catch((error) => console.error(`Scheduled orders: ${error.message}`));
-addOrderRoutes(app, orderScheduler, { onSession: (s) => { openingCollector.setSession(s); auctionTracker.setSession(s); } });
+addOrderRoutes(app, orderScheduler, { onSession: (s) => { openingCollector.setSession(s); auctionTracker.setSession(s); gapLive.setSession(s); } });
 
 // Opening window 09:15–09:20 (Kite WebSocket) and the 09:20 decision with paper trading (milestone 2).
 const dataDir = fileURLToPath(new URL('../.data', import.meta.url));
@@ -316,7 +326,7 @@ wakeAuction();
 const openingSubscribers = new Set();
 let openingLatest = { status: { phase: 'idle' }, rows: [] };
 // The scanner payload carries the trading view of the ledger it shows (the replay's, during a replay).
-const withTrading = (payload) => ({ ...payload, trading: tradingDesk.view(payload.status?.source === 'replay' ? 'replay' : 'day') });
+const withTrading = (payload) => ({ ...payload, trading: tradingDesk.view(payload.status?.source === 'replay' ? 'replay' : 'day'), gapLive: gapLive.view() });
 const broadcastOpening = () => {
   const payload = withTrading(openingLatest);
   for (const send of openingSubscribers) { try { send(payload); } catch { openingSubscribers.delete(send); } }
@@ -368,16 +378,36 @@ const openingCollector = createOpeningCollector({
   },
   // Candidates: today's 09:10 pre-open analysed as in the browser (factors from the browser's last choice).
   getCandidates: async (date) => {
-    gapSymbols = (await gapEntries(date).catch(() => [])).map((e) => e.symbol);
+    // Paper gap entries, plus today's scheduled orders with live gap exits (their ticks drive the live exits).
+    const optedIn = (await orderScheduler.list().catch(() => [])).filter((o) => o.exits === 'gap' && indiaDate(new Date(o.triggerAt)) === date && o.status !== 'cancelled');
+    gapSymbols = [...new Set([...(await gapEntries(date).catch(() => [])).map((e) => e.symbol), ...optedIn.map((o) => o.symbol)])];
     return preopenStocks();
   },
-  trading: tradingDesk,
+  // The paper desk, plus the live gap exits (live ticks and the seal only; never a replay).
+  trading: {
+    onStart: (...a) => tradingDesk.onStart(...a),
+    onSeal: async (sealed, o) => { const r = await tradingDesk.onSeal(sealed, o); if (!o?.replay) gapLive.onSeal(sealed); return r; },
+    onTicks: (ticks, receivedAt, o) => { tradingDesk.onTicks(ticks, receivedAt, o); if (!o?.replay) gapLive.onTicks(ticks); },
+    onReplayEnd: () => tradingDesk.onReplayEnd(),
+    keepTokens: () => [...new Set([...tradingDesk.keepTokens(), ...gapLive.tokens()])],
+  },
   onUpdate: (payload) => {
     openingLatest = payload;
     broadcastOpening();
   },
 });
 tradingDesk.attach({ follow: openingCollector.follow, unfollow: openingCollector.unfollow });
+// LIVE gap exits: switch + today's typed confirmation in .data/gap-live.json; events in .data/live/.
+const gapLive = createGapLiveExits({
+  kite, log: createEventLog(`${dataDir}/live`), instruments: instrumentService,
+  settings: () => {
+    const t = cleanTradingSettings(readJsonFile('trading-settings.json') ?? {});
+    return { ...(readJsonFile('gap-live.json') ?? {}), gapExits: t.gapExits, risk: t.risk };
+  },
+  planFor: (symbol, side) => tradingDesk.gapPlanFor(symbol, side),
+  onUpdate: () => broadcastOpening(),
+  follow: (tokens) => openingCollector.follow(tokens),
+});
 addOpeningRoutes(app, openingCollector, {
   tickLog,
   getLatest: () => withTrading(openingLatest),
@@ -391,7 +421,10 @@ app.put('/api/opening/settings', (req, res) => {
   res.json(saved);
 });
 // Each trading morning: arm the day (and again just before connecting, in case the import was late).
-addTradingRoutes(app, tradingDesk, { settingsFile: `${dataDir}/trading-settings.json`, log: paperLog, gapListFile: `${dataDir}/gap915-list.json`, paperDir: `${dataDir}/paper` });
+addTradingRoutes(app, tradingDesk, {
+  settingsFile: `${dataDir}/trading-settings.json`, log: paperLog, gapListFile: `${dataDir}/gap915-list.json`, paperDir: `${dataDir}/paper`,
+  live: gapLive, liveFile: `${dataDir}/gap-live.json`, calendar,
+});
 const wakeOpening = () => openingCollector.wake()
   .then(() => tradingDesk.wake({ sealedFor: openingCollector.sealedFor }))
   .catch((error) => console.error(`Opening window: ${error.message}`));

@@ -99,7 +99,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
   const [form, setForm] = useState(() => ({
     symbol: '', side: 'BUY', quantity: settings.quantity || 1, orderType: 'MARKET', price: '',
     product: ['MIS', 'CNC', 'NRML'].includes(settings.product) ? settings.product : 'MIS',
-    date: defaultDate(new Date()), time: '09:15:00',
+    date: defaultDate(new Date()), time: '09:15:00', exits: false, gapAutoSize: false,
   }));
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
 
@@ -163,7 +163,9 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
     ? new Date(`${form.date}T${form.time.length === 5 ? `${form.time}:00` : form.time}+05:30`) : null;
   const priceNum = Number(form.price);
   const tick = priceNum > 0 ? tickSize(priceNum) : null;
-  const summary = `${form.side} ${form.quantity} ${form.symbol.trim().toUpperCase() || '…'} at ${form.orderType === 'LIMIT' ? `limit ${form.price ? rs(priceNum) : '…'}` : 'market'} (${form.product})${triggerAt ? `, sent at ${when(triggerAt.toISOString())} IST` : ''}`;
+  // Live gap exits: PC backend only, and only a 09:15 MARKET MIS order on NSE.
+  const liveExitsOk = Boolean(api.trading) && form.orderType === 'MARKET' && form.product === 'MIS' && (settings.exchange || 'NSE') === 'NSE' && String(form.time).startsWith('09:15');
+  const summary = `${form.side} ${form.quantity} ${form.symbol.trim().toUpperCase() || '…'} at ${form.orderType === 'LIMIT' ? `limit ${form.price ? rs(priceNum) : '…'}` : 'market'} (${form.product})${triggerAt ? `, sent at ${when(triggerAt.toISOString())} IST` : ''}${liveExitsOk && form.exits ? ' + LIVE gap exits (real SL-M and targets at Kite)' : ''}`;
 
   const schedule = async (e) => {
     e.preventDefault();
@@ -176,6 +178,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
         price: form.orderType === 'LIMIT' ? Number(form.price) : null, product: form.product, exchange: settings.exchange || 'NSE',
         triggerAt: triggerAt.toISOString(), marketProtection: settings.marketProtection, autoslice: settings.autoslice, tag: settings.tag,
         note: stock ? `Conviction ${stock.convictionScore ?? '—'}` : '',
+        ...(liveExitsOk && form.exits ? { exits: 'gap', gapAutoSize: form.gapAutoSize } : {}),
       });
       setOrders(r.orders ?? []); setClock(r.clock ?? null);
       setScheduler(r.session ?? null);
@@ -312,6 +315,26 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
               <button type="button" className="btn ghost" onClick={nextMinute}>Next minute</button>
             </span>
           </label>
+          {api.trading && (
+            <div className="field live-exits-field">
+              <span>Live gap exits <span className="badge mode-badge mode-live">LIVE</span></span>
+              <label className="hint">
+                <input type="checkbox" disabled={!liveExitsOk} checked={liveExitsOk && form.exits} onChange={(e) => set({ exits: e.target.checked })} />{' '}
+                After this order fills, place a real SL-M at Kite and send the targets (the 9:15 gap plan)
+              </label>
+              {liveExitsOk && form.exits && (
+                <label className="hint">
+                  <input type="checkbox" checked={form.gapAutoSize} onChange={(e) => set({ gapAutoSize: e.target.checked })} />{' '}
+                  At 09:14, send min(this quantity, the gap plan&apos;s quantity)
+                </label>
+              )}
+              <span className="hint">
+                {liveExitsOk
+                  ? 'Sent only if live gap exits are armed that day (Settings switch + typed confirmation on the Orders card). Real orders; a stop can fill worse than its trigger, or not at all at a circuit.'
+                  : 'Only for a Market, MIS order at 09:15:00–09:15:59.'}
+              </span>
+            </div>
+          )}
         </div>
         <div className="order-submit">
           <span className="order-summary">{summary}</span>
@@ -333,6 +356,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
                   <td>
                     <span className={o.side === 'BUY' ? 'adv-text' : 'dec-text'}>{o.side}</span> {o.quantity} <span className="mono">{o.symbol}</span>{' '}
                     {o.orderType === 'LIMIT' ? `limit ${rs(o.price)}` : 'market'} · {o.product} <span className="hint">{o.id}</span>
+                    {o.exits === 'gap' && <> <span className="badge mode-badge mode-live" title="Real SL-M and targets at Kite after the fill (when armed)">live gap exits</span>{o.gapAutoSize ? <span className="hint"> · auto-size at 09:14</span> : null}</>}
                   </td>
                   <td><span className={`badge ${STATUS_CLASS[o.status]}`}>{o.status === 'placing' ? 'sending…' : 'scheduled'}</span></td>
                   <td>{o.status === 'scheduled' && <button type="button" className="btn danger" onClick={() => cancel(o)}>Cancel</button>}</td>
@@ -355,6 +379,8 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
                   <td>
                     <span className={o.side === 'BUY' ? 'adv-text' : 'dec-text'}>{o.side}</span> {o.quantity} <span className="mono">{o.symbol}</span>{' '}
                     {o.orderType === 'LIMIT' ? `limit ${rs(o.price)}` : 'market'} · {o.product}
+                    {o.exits === 'gap' && <> <span className="badge mode-badge mode-live">live gap exits</span></>}
+                    {o.sizing && <div className="hint" title={o.sizing.reason}>Sized at 09:14: entered {o.sizing.entered}, plan {o.sizing.plan ?? '—'}, sent {o.sizing.sent}</div>}
                   </td>
                   <td><span className={`badge ${STATUS_CLASS[o.status]}`}>{o.status}</span></td>
                   <td className="wrap-cell order-detail">

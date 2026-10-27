@@ -107,6 +107,14 @@ export function createWebApi() {
       gapReport: () => json(fetch('/api/trading/gap-report')),
       gapReportXlsxUrl: () => '/api/trading/gap-report?format=xlsx',
       gapReportCsvUrl: () => '/api/trading/gap-report?format=csv',
+      /** LIVE gap exits for opted-in scheduled 09:15 orders: the switch, today's typed arming, status, kill. */
+      live: {
+        state: () => json(fetch('/api/trading/live')),
+        setEnabled: (enabled) => json(post('/api/trading/live', { enabled }, 'PUT')),
+        arm: (confirm) => json(post('/api/trading/live/arm', { confirm })),
+        disarm: () => json(post('/api/trading/live/disarm', {})),
+        kill: () => json(post('/api/trading/live/kill', {})),
+      },
     },
     /** Live prices from NSE (fallback when Kite has no market data), in Kite's quote shape. */
     live: { quote: (instruments) => json(post('/api/nse/live', { instruments })) },

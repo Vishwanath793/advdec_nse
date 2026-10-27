@@ -22,7 +22,6 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 | Who (name / account) | Branch | What | Started | Files / areas touched |
 |---|---|---|---|---|
-| Claude Code for vinayakb374 | android-app | 9:15 gap entry: phase-1 fixes and phase 2 (LIVE exits for opted-in scheduled 09:15 orders) | 2026-10-27 | src/utils/gapExits.js, gapLive.js (new), src/core/gapLiveExits.js (new), orderScheduler.js, paperLedger.js, tradingDesk.js, server/index.js, tradingRoutes.js, orderRoutes.js, GapEntryPanel.jsx, OrdersPage.jsx, TradingPanel.jsx; tests |
 | Vishwanath793 with Claude Code (DELL) — **paused** | android-app | Milestone 3 part 2: Kite historical candle download + cache, server routes, Research section on the Report card page with Excel export. Uncommitted in the shared folder: `src/core/backtestData.js` (planner + candle cache, loads) and `server/backtestData.test.js` (cut off, not in the test script) | 2026-10-19 | new src/core/backtestData.js, server/researchRoutes.js, src/ResearchPanel.jsx; src/ReportCardPage.jsx, src/platform/web.js, server/index.js; tests |
 ---
 
@@ -40,6 +39,66 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 ---
 
 ## Entries (newest first)
+
+### 2026-10-27: 9:15 gap entry phase 2: LIVE gap exits for opted-in scheduled 09:15 orders; phase-1 gaps closed (Claude Code for vinayakb374, android-app, local commits)
+**Go-ahead:** asked in chat ("Should I build phase 2 now?"), and the owner chose "Yes, build phase 2 now". The
+phase-1 fixes are in their own commit (70df933).
+
+**Phase-1 fixes:**
+- The 09:20 check comes from the sealed window (`sealCheck` at the seal). The first tick after 09:20:05 is only the
+  fallback.
+- A stock locked at its circuit with no opposite side is refused at 09:15.
+- Exit codes follow the spec: `stop`, `t1`, `t2`, `trail`, `gap-failed-0920`, `time-stop`, `square-off`, `kill`.
+- CSV export of the gap trades.
+
+**Phase 2 (LIVE):**
+- **Opt-in:** per new scheduled order (`exits: 'gap'`), only for MARKET, MIS, NSE orders sent at 09:15:00–09:15:59.
+  - The order gets a findable tag (`L<dd>E1<SYMBOL>`).
+  - Off by default; existing orders never change.
+  - The phone's scheduler refuses the opt-in.
+- **Arming:** the Settings switch, plus today's typed `LIVE YYYY-MM-DD` on the Orders card (`.data/gap-live.json`).
+  The scheduler **does not send an opted-in order that isn't armed** that day.
+- **Optional auto-size at 09:14:00:** sends min(entered, gap plan); never more than entered.
+- **After the fill** (`src/core/gapLiveExits.js`, rules in `src/utils/gapLive.js`):
+  - Kite's order book is polled every 1.5 s.
+  - Levels are re-planned from `average_price`, and an SL-M (market protection −1) rests at Kite for the filled
+    quantity; it is resized as the entry fills further.
+  - **T1/T2:** shrink (or cancel and confirm) the SL-M, then a LIMIT IOC, then the stop back for what is left
+    (breakeven plus costs after T1).
+  - The 09:20 check from the seal, the time stop, the trail (modify the trigger), square-off 15:10, and a kill
+    button. Each cancels the SL-M and confirms it in the order book before a MARKET exit; if the SL-M filled,
+    nothing more is sent.
+  - A rejected SL-M exits at market.
+  - **Unknown outcomes:** every tag is logged before sending; the order book is searched by tag before the one retry.
+  - A static-IP refusal or session expiry halts that position with a message; nothing is retried or worked around.
+  - **Restart:** rebuilt from `.data/live/DATE.ndjson`, then reconciled with Kite's order book and MIS positions.
+    Kite wins, and the differences are listed.
+- Ticks come from the collector (opted-in symbols are always subscribed); live exits never act on replays.
+
+**Files:**
+- New: `src/utils/gapLive.js`, `src/core/gapLiveExits.js`, `server/gapLive.test.js`.
+- Changed: `src/core/orderScheduler.js`, `server/index.js`, `server/tradingRoutes.js`, `src/platform/web.js`,
+  `src/OrdersPage.jsx`, `src/GapEntryPanel.jsx`, `src/TradingPanel.jsx`, `src/styles.css`, `package.json`,
+  `CLAUDE.md` (milestone 4 row).
+
+**Tests / checks:**
+- npm test: 317 pass, 15 new in `server/gapLive.test.js` against a fake Kite. They cover partial fills, the T1
+  sequence, a stop filling during a target, unknown outcomes (created / not created), a rejected SL-M, a static-IP
+  refusal, session expiry, time stop and 09:20 failure, restart reconciliation, not armed, and the scheduler gating.
+- npm run build, npx cap sync android.
+- Restarted :3002 at 19:59 IST (no pending order). The Orders card's live section (off), the order-form opt-in and
+  the Settings switch (off) render with no console errors.
+- I did not turn the switch on or arm anything.
+
+**Not verified:**
+- **Nothing live has run.** No real SL-M, IOC or exit has been sent.
+- Kite's behaviour for IOC fills, modifying an SL-M's quantity and the `order_type` param on modify comes from the
+  docs, not from a live session.
+- The 09:14 auto-size depends on the opening universe being prepared by then.
+- Polling every 1.5 s, not Kite's order WebSocket updates.
+
+**Next:** Run paper mornings first. Then, for a first live try, one small opted-in order with the switch on and
+today's confirmation. Watch the Orders card and Kite together.
 
 ### 2026-10-27: 9:15 gap entry: Kite's previous-day high/low; trail bars labelled approximate (Claude Code for vinayakb374, android-app, local commit)
 **What changed:**

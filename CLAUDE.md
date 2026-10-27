@@ -85,7 +85,7 @@ unverified, and wait for the go-ahead.**
 | 1 | Data collector (Kite WebSocket, seal at 09:20, recordings, scanner) | **Done**, commit 3599186 (pushed; Android CI green) |
 | 2 | 09:20 decision in PAPER (strategies, score, risk, paper broker, UI) | **Done**, commit 9274f4d (pushed; Android CI green) |
 | 3 | Research: candle backtests, tick replay, report-card comparisons, exports | **Part 1 done** (pure backtest engine, tick replay, tests). **Part 2 open**: data download, routes, UI, export. See DEVLOG.md |
-| 4 | LIVE execution | **Groundwork only** (owner's go-ahead given 2026-10-18): Kite order-book/modify/cancel calls, unknown-outcome errors and pure order helpers (`src/utils/liveOrders.js`). The live broker, arming, wiring and UI are **not built**; LIVE is still unavailable. See DEVLOG.md |
+| 4 | LIVE execution | **Groundwork only** (owner's go-ahead given 2026-10-18): Kite order-book/modify/cancel calls, unknown-outcome errors and pure order helpers (`src/utils/liveOrders.js`). The live broker, arming, wiring and UI are **not built**; LIVE is still unavailable **for the 09:20 system**. Separately, the 9:15 gap entry has **LIVE gap exits** (2026-10-27, owner's go-ahead): only for scheduled 09:15 MARKET MIS orders that opt in, off by default, armed per day with the typed confirmation (`src/core/gapLiveExits.js`, `src/utils/gapLive.js`; spec `docs/prompt-915-gap-exits.md`). Not yet run in market hours. See DEVLOG.md |
 
 **Rules from the spec. They still apply.**
 - Never log, export or persist the Kite API secret or access token. The backend holds the token **in memory

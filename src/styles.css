@@ -834,3 +834,6 @@ body {
   .ai-question { max-width: 100%; }
   .ai-times { grid-template-columns: 1fr; }
 }
+.live-exits { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.live-exits h4 { margin: 0 0 8px; }
+.live-exits-field label { display: block; margin: 2px 0; }
