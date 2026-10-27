@@ -1,7 +1,7 @@
 import { indiaDate, istInstant, marketDay } from './calendar.js';
 import { createPaperBroker } from './paperBroker.js';
 import { cleanScoringSettings, decideOpening, decisionRow, DEFAULT_SCORING_SETTINGS } from '../utils/decision.js';
-import { ledgerDay } from '../utils/paperLedger.js';
+import { GAP_CHECK_FALLBACK_MS, ledgerDay } from '../utils/paperLedger.js';
 import { cleanRiskSettings, DEFAULT_RISK_SETTINGS, tradeBlockers } from '../utils/risk.js';
 import { DEFAULT_STRATEGY_SETTINGS, strategySettings } from '../utils/strategies.js';
 import { cleanGapExitSettings, DEFAULT_GAP_EXIT_SETTINGS, gapExitPlan } from '../utils/gapExits.js';
@@ -81,7 +81,7 @@ export function createTradingDesk({
   const cfg = () => cleanTradingSettings(settings());
   const changed = () => { try { onUpdate(); } catch { /* ignore */ } };
   const at = (date, time) => +istInstant(date, time);
-  const gapTiming = (date) => ({ settings: cfg().gapExits, checkAt: at(date, '09:20'), timeStopAt: at(date, cfg().gapExits.timeStopAt) });
+  const gapTiming = (date) => ({ settings: cfg().gapExits, checkAt: at(date, '09:20') + GAP_CHECK_FALLBACK_MS, timeStopAt: at(date, cfg().gapExits.timeStopAt) });
   const brokers = {
     day: createPaperBroker({ store, log, ledger: 'day', risk: () => cfg().risk, gap: gapTiming, onChange: changed, now }),
     replay: createPaperBroker({ ledger: 'replay', risk: () => cfg().risk, gap: gapTiming, onChange: changed, now }),
@@ -190,6 +190,7 @@ export function createTradingDesk({
         lastReconcile = await brokers.day.load(sealed.date);
         armSquareOff(sealed.date);
       }
+      brokers[ledger].sealCheck(sealed); // the 9:15 gap entries' 09:20 check, from the sealed window
       const result = await decide(sealed, ledger, { partial });
       changed();
       return result;

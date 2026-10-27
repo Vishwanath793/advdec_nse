@@ -22,6 +22,7 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 | Who (name / account) | Branch | What | Started | Files / areas touched |
 |---|---|---|---|---|
+| Claude Code for vinayakb374 | android-app | 9:15 gap entry: phase-1 fixes and phase 2 (LIVE exits for opted-in scheduled 09:15 orders) | 2026-10-27 | src/utils/gapExits.js, gapLive.js (new), src/core/gapLiveExits.js (new), orderScheduler.js, paperLedger.js, tradingDesk.js, server/index.js, tradingRoutes.js, orderRoutes.js, GapEntryPanel.jsx, OrdersPage.jsx, TradingPanel.jsx; tests |
 | Vishwanath793 with Claude Code (DELL) — **paused** | android-app | Milestone 3 part 2: Kite historical candle download + cache, server routes, Research section on the Report card page with Excel export. Uncommitted in the shared folder: `src/core/backtestData.js` (planner + candle cache, loads) and `server/backtestData.test.js` (cut off, not in the test script) | 2026-10-19 | new src/core/backtestData.js, server/researchRoutes.js, src/ResearchPanel.jsx; src/ReportCardPage.jsx, src/platform/web.js, server/index.js; tests |
 ---
 

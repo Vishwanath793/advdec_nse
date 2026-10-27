@@ -217,7 +217,11 @@ test('a replay hands the seal and the later ticks to the trading desk (replay le
   assert.equal(v.ledgerState.gap.trades, 5);
   const locked = v.ledgerState.orders.find((o) => o.symbol === 'LOCKED' && o.strategy === 'gap915');
   assert.equal(locked.filledQty, 0, 'no sellers at the upper circuit: never filled');
-  assert.equal(locked.status, 'CANCELLED', 'cancelled when the replay ended (before the 09:30 entry window)');
+  assert.equal(locked.status, 'REJECTED');
+  assert.match(locked.reason, /locked at the upper circuit .* no sellers: not entered/);
+  // The 09:20 check came from the sealed window for the gap entries still open at the seal.
+  const checked = v.ledgerState.positions.filter((p) => p.strategy === 'gap915' && p.check0920);
+  assert.ok(checked.length >= 1 && checked.every((p) => p.check0920.source === 'sealed 09:15–09:20 window'));
   assert.equal(v.ledgerState.positions.every((p) => p.status === 'CLOSED'), true, 'everything closed by the end of the replay');
   assert.equal(h.collector.status().message, 'Replay finished.');
   assert.equal(files.size, 0);

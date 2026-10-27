@@ -351,8 +351,8 @@ export function gapTradeRows(ledgers) {
         date: l.date, symbol: p.symbol, side: p.side, type: plan.type ?? null, gapPct: plan.gapPct ?? null, g: plan.g ?? null,
         factor: plan.factor ?? null, qty: p.entryQty, entry: p.avgEntry,
         plannedEntry: plan.entry ?? null, sl: p.levels?.sl ?? plan.sl ?? null, t1: p.levels?.t1 ?? plan.t1 ?? null, t2: p.levels?.t2 ?? plan.t2 ?? null,
-        exits: p.exits.map((x) => `${x.qty} @ ${x.price} (${x.reason})`).join('; '),
-        lastExit: p.exits.at(-1)?.kind ?? null,
+        exits: p.exits.map((x) => `${x.qty} @ ${x.price} (${x.code ?? x.kind}: ${x.reason})`).join('; '),
+        lastExit: p.exits.at(-1)?.code ?? p.exits.at(-1)?.kind ?? null,
         gross: p.gross, charges: p.charges, net: p.net,
         r: riskRs ? r2(p.net / riskRs) : null,
         maeAtr: p.mae != null && plan.atr ? r2(p.mae / plan.atr) : null,
@@ -374,6 +374,13 @@ export function gapReportSheets(rows, summary) {
     ...summary.map((s) => [s.type, s.trades, s.wins, s.winRate, s.avgR, s.net, s.avgMaeAtr, s.avgMfeAtr]),
   ];
   return [{ name: 'Gap entries', rows: trades }, { name: 'By gap type', rows: byType }];
+}
+
+/** The trades sheet as CSV text (quoted where needed). */
+export function gapReportCsv(rows) {
+  const [sheet] = gapReportSheets(rows, []);
+  const cell = (v) => (v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  return `${sheet.rows.map((r) => r.map(cell).join(',')).join('\n')}\n`;
 }
 
 /** Trades, win rate, average R and average adverse/favourable excursion (in ATR) by gap type. */

@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { istInstant } from '../src/core/calendar.js';
 import { createTradingDesk, gapInputsFromMeta } from '../src/core/tradingDesk.js';
 import {
-  breakevenStop, check0920, cleanGapExitSettings, cleanGapList, gapEntriesFor, gapExitPlan, gapSummary, gapTradeRows, gapType, ratchetStop,
+  breakevenStop, check0920, cleanGapExitSettings, cleanGapList, gapEntriesFor, gapExitPlan, gapReportCsv, gapSummary, gapTradeRows, gapType, ratchetStop,
   replanAfterFill, timeStopDue, trailCandidate, updateBar,
 } from '../src/utils/gapExits.js';
-import { emptyLedger, gapOrderEvents, ledgerDay, rebuildLedger, stepTick } from '../src/utils/paperLedger.js';
+import { emptyLedger, gapOrderEvents, ledgerDay, rebuildLedger, sealedCheckTick, stepTick } from '../src/utils/paperLedger.js';
 import { readCalendar } from './tv/calendar.js';
 
 const D = '2026-10-19';
@@ -206,6 +206,7 @@ test('ledger: target 1, breakeven plus costs, then the trail takes the second ha
   const p = state.positions[0];
   assert.equal(p.status, 'CLOSED');
   assert.deepEqual(p.exits.map((x) => x.kind), ['target1', 'trail']);
+  assert.deepEqual(p.exits.map((x) => x.code), ['t1', 'trail'], 'the spec\'s exit codes');
   assert.equal(p.exits[0].qty, Math.floor(p.entryQty / 2));
   assert.match(p.stopReason, /^trail/);
   assert.ok(p.exits[1].price > p.avgEntry, 'the trailed half closed in profit');
@@ -229,16 +230,39 @@ test('ledger: the stop exits at the bid minus slippage, worse than the stop', ()
 
 test('ledger: the gap fails at 09:20 (below VWAP and the open): everything exits', () => {
   const plan = gapExitPlan({ ...base, side: 'BUY', open: 1012, upperCircuit: 1200, lowerCircuit: 800 }, {}, RISK);
-  const { state } = morning(plan, [tk(T('09:15', 1), 1012), tk(T('09:18'), 1010), tk(T('09:20', 1), 1008, { vwap: 1010.5, low: 1006 })]);
+  const { state } = morning(plan, [tk(T('09:15', 1), 1012), tk(T('09:18'), 1010), tk(T('09:20', 6), 1008, { vwap: 1010.5, low: 1006 })]);
   const p = state.positions[0];
   assert.equal(p.exits[0].kind, 'gap-failed');
+  assert.equal(p.exits[0].code, 'gap-failed-0920');
   assert.match(p.exits[0].reason, /gap failed at 09:20/);
   assert.equal(p.check0920.failed, true);
+  assert.match(p.check0920.source, /first tick after 09:20/);
+});
+
+test('ledger: the 09:20 check from the sealed window (range, VWAP, last price at the seal), on the latest book', () => {
+  const plan = gapExitPlan({ ...base, side: 'BUY', open: 1012, upperCircuit: 1200, lowerCircuit: 800 }, {}, RISK);
+  const { state } = morning(plan, [tk(T('09:15', 1), 1012), tk(T('09:19', 50), 1015)]);
+  const last = tk(T('09:19', 50), 1015);
+  const sealed = { orLow: 1009, orHigh: 1016, vwap: 1012, ltp: 1015, open: 1012 };
+  stepTick(state, sealedCheckTick(last, sealed), T('09:20', 1.5), RISK);
+  const p = state.positions[0];
+  assert.equal(p.check0920.source, 'sealed 09:15–09:20 window');
+  assert.equal(p.check0920.orLow, 1009);
+  assert.equal(p.stop, 1007.5, 'tightened to the sealed range low − 0.05 ATR');
+});
+
+test('ledger: a stock locked at its circuit with no sellers is refused at 09:15 (the one refusal)', () => {
+  const plan = gapExitPlan({ ...base, side: 'BUY', open: 1100, upperCircuit: 1100, lowerCircuit: 900 }, {}, RISK);
+  const locked = { ...tk(T('09:15', 1), 1100), depth: { buy: depth(1100, 1100.1).buy, sell: Array(5).fill({ price: 0, qty: 0, orders: 0 }) } };
+  const { state } = morning(plan, [locked]);
+  assert.equal(state.orders[0].status, 'REJECTED');
+  assert.match(state.orders[0].reason, /locked at the upper circuit ₹1100 with no sellers/);
+  assert.equal(state.positions.length, 0);
 });
 
 test('ledger: the 09:20 check tightens the stop; the time stop exits a trade that went nowhere', () => {
   const plan = gapExitPlan({ ...base, side: 'BUY', open: 1012, upperCircuit: 1200, lowerCircuit: 800 }, {}, RISK);
-  const ticks = [tk(T('09:15', 1), 1012), tk(T('09:20', 1), 1014, { low: 1009, vwap: 1012 })];
+  const ticks = [tk(T('09:15', 1), 1012), tk(T('09:20', 6), 1014, { low: 1009, vwap: 1012 })];
   for (let m = 21; m <= 46; m += 5) ticks.push(tk(T(`09:${m}`), 1014));
   const { state } = morning(plan, ticks);
   const p = state.positions[0];
@@ -251,7 +275,7 @@ test('ledger: the 09:20 check tightens the stop; the time stop exits a trade tha
 
 test('ledger: square-off closes an open gap entry; rebuilding from the log gives the same day', () => {
   const plan = gapExitPlan({ ...base, side: 'SELL', open: 988, upperCircuit: 1200, lowerCircuit: 800 }, {}, RISK);
-  const ticks = [tk(T('09:15', 1), 988, { open: 988 }), tk(T('09:20', 1), 986, { open: 988, high: 990, vwap: 987 }), tk(T('09:46'), 982, { open: 988, high: 990, vwap: 985 })];
+  const ticks = [tk(T('09:15', 1), 988, { open: 988 }), tk(T('09:20', 6), 986, { open: 988, high: 990, vwap: 987 }), tk(T('09:46'), 982, { open: 988, high: 990, vwap: 985 })];
   ticks.push(tk(T('15:10', 1), 984, { open: 988, high: 990, vwap: 985 }));
   const { state, events } = morning(plan, ticks, { squareOffAt: T('15:10') });
   const p = state.positions[0];
@@ -286,6 +310,12 @@ test('report rows and the summary by gap type', () => {
   assert.ok(rows[1].maeAtr > 0);
   const normal = gapSummary(rows).find((x) => x.type === 'normal');
   assert.deepEqual([normal.trades, normal.wins, normal.winRate], [2, 1, 50]);
+  assert.equal(rows[1].lastExit, 'stop');
+  const csv = gapReportCsv(rows).trim().split('\n');
+  assert.equal(csv.length, 3, 'header + 2 trades');
+  assert.match(csv[0], /^Date,Symbol,Side,Gap type/);
+  assert.ok(csv[2].includes('(stop: stop loss)'), 'exit codes and reasons in the trades');
+  assert.match(gapReportCsv([{ ...rows[0], symbol: 'A,B' }]).split('\n')[1], /^[^,]+,"A,B",/, 'a cell with a comma is quoted');
 });
 
 test('gap list: cleaned; scheduled 09:15 market orders are shadowed only when on, never changed', () => {

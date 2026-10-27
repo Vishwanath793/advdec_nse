@@ -106,6 +106,7 @@ export function createWebApi() {
       gapPlan: (symbol, side = 'BUY') => json(fetch(`/api/trading/gap-plan/${encodeURIComponent(symbol)}?side=${side}`)),
       gapReport: () => json(fetch('/api/trading/gap-report')),
       gapReportXlsxUrl: () => '/api/trading/gap-report?format=xlsx',
+      gapReportCsvUrl: () => '/api/trading/gap-report?format=csv',
     },
     /** Live prices from NSE (fallback when Kite has no market data), in Kite's quote shape. */
     live: { quote: (instruments) => json(post('/api/nse/live', { instruments })) },

@@ -43,6 +43,19 @@ import { cleanRiskSettings } from './risk.js';
  */
 
 export const GAP_STRATEGY = 'gap915';
+/** Without a sealed window by 09:20 + this, the first tick after does the gap entries' 09:20 check. */
+export const GAP_CHECK_FALLBACK_MS = 5_000;
+/** Exit reason codes for gap entries (the ledger's exit kinds → the spec's names). */
+export const GAP_EXIT_CODES = {
+  stop: 'stop', target1: 't1', target2: 't2', trail: 'trail', 'gap-failed': 'gap-failed-0920',
+  'time-stop': 'time-stop', squareoff: 'square-off', kill: 'kill', 'close-all': 'kill',
+};
+
+/**
+ * A synthetic tick carrying the sealed window's figures for the 09:20 check of a gap entry:
+ * the opening range, Kite's VWAP and the last price at the seal, on the latest book.
+ */
+export const sealedCheckTick = (lastTick, s) => ({ ...lastTick, sealed: true, low: s.orLow, high: s.orHigh, avgPrice: s.vwap, ltp: s.ltp, open: s.open || lastTick.open });
 const emptyGap = () => ({ realised: 0, charges: 0, trades: 0, wins: 0, losses: 0 });
 
 export const emptyLedger = (date, ledger = 'day') => ({
@@ -128,7 +141,7 @@ export function applyEvent(state, e) {
       if (!pos || pos.status !== 'OPEN') break;
       const qty = Math.min(e.qty, pos.qty);
       if (qty <= 0) break;
-      pos.exits.push({ qty, price: e.price, reason: e.reason, kind: e.kind, at: e.at });
+      pos.exits.push({ qty, price: e.price, reason: e.reason, kind: e.kind, at: e.at, ...(pos.strategy === GAP_STRATEGY ? { code: GAP_EXIT_CODES[e.kind] ?? e.kind } : {}) });
       if (e.mae != null) pos.mae = e.mae;
       if (e.mfe != null) pos.mfe = e.mfe;
       pos.qty -= qty;
@@ -143,7 +156,7 @@ export function applyEvent(state, e) {
       if (pos?.status === 'OPEN' && !pos.exits.length) { pos.stop = e.levels.sl; pos.target1 = e.levels.t1; pos.target2 = e.levels.t2; pos.levels = e.levels; }
       break;
     case 'check0920':
-      if (pos?.status === 'OPEN') pos.check0920 = { orLow: e.orLow, orHigh: e.orHigh, vwap: e.vwap, ltp: e.ltp, open: e.open, failed: e.failed };
+      if (pos?.status === 'OPEN') pos.check0920 = { orLow: e.orLow, orHigh: e.orHigh, vwap: e.vwap, ltp: e.ltp, open: e.open, failed: e.failed, source: e.source ?? null };
       break;
     case 'timecheck':
       if (pos?.status === 'OPEN') pos.timeChecked = true;
@@ -246,7 +259,15 @@ export function stepTick(state, tick, at, risk, { squareOffAt = null, gap = {} }
     if (o.market) {
       // Market entry: walk the opposite side of the book plus slippage, no price limit; the rest waits for the next book.
       const book = levels(tick, up ? 'sell' : 'buy');
-      if (!book.length) continue;
+      if (!book.length) {
+        // Locked at the circuit on the trade's side with no opposite side: the one case a gap entry is refused.
+        const limit = up ? o.plan?.inputs?.upperCircuit : o.plan?.inputs?.lowerCircuit;
+        const tk = o.plan?.tick ?? 0.05;
+        if (o.status === 'PENDING' && limit > 0 && tick.ltp > 0 && (up ? tick.ltp >= limit - tk / 2 : tick.ltp <= limit + tk / 2)) {
+          emit({ type: 'reject', orderId: o.id, reason: `locked at the ${up ? 'upper' : 'lower'} circuit ₹${limit} with no ${up ? 'sellers' : 'buyers'}: not entered`, at: iso });
+        }
+        continue;
+      }
       if (o.status === 'PENDING') emit({ type: 'triggered', orderId: o.id, at: iso });
       let remaining = o.qty - o.filledQty;
       let qty = 0;
@@ -335,7 +356,8 @@ function stepGap(state, p, tick, at, { touch, exitAll, emit, iso, gap }) {
   const atr = p.plan?.atr ?? 0;
   const ptick = p.plan?.tick ?? 0.05;
   const S = lv.stopDistance ?? lv.S ?? 0;
-  const checkAt = gap.checkAt ?? +istInstant(state.date, '09:20');
+  // The sealed window does the 09:20 check at the seal; a tick does it only if no seal came by 09:20:05.
+  const checkAt = gap.checkAt ?? +istInstant(state.date, '09:20') + GAP_CHECK_FALLBACK_MS;
   const timeStopAt = gap.timeStopAt ?? +istInstant(state.date, cfg.timeStopAt);
   const withExc = (e) => ({ ...e, mae: p.mae, mfe: p.mfe });
 
@@ -347,9 +369,12 @@ function stepGap(state, p, tick, at, { touch, exitAll, emit, iso, gap }) {
   }
 
   // 2. The 09:20 check, once: tighten to the opening range; exit if below VWAP and the open.
-  if (!p.check0920 && at >= checkAt && at < timeStopAt) {
+  if (!p.check0920 && (tick.sealed || at >= checkAt) && at < timeStopAt) {
     const c = check0920({ d, stop: p.stop, orLow: tick.low, orHigh: tick.high, vwap: tick.avgPrice, ltp: tick.ltp, open: tick.open || p.plan?.open, atr, tick: ptick }, cfg);
-    emit({ type: 'check0920', positionId: p.id, orLow: tick.low ?? null, orHigh: tick.high ?? null, vwap: tick.avgPrice ?? null, ltp: tick.ltp ?? null, open: tick.open || p.plan?.open || null, failed: c.failed, at: iso });
+    emit({
+      type: 'check0920', positionId: p.id, orLow: tick.low ?? null, orHigh: tick.high ?? null, vwap: tick.avgPrice ?? null, ltp: tick.ltp ?? null,
+      open: tick.open || p.plan?.open || null, failed: c.failed, source: tick.sealed ? 'sealed 09:15–09:20 window' : 'Kite day high/low and average price, first tick after 09:20', at: iso,
+    });
     if (c.failed) { exitAll('gap-failed', c.reason); return; }
     if (c.stop !== p.stop) emit({ type: 'stop', positionId: p.id, stop: c.stop, reason: 'tightened to the opening range at 09:20', at: iso });
   }

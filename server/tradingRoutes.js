@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { sameOriginOnly } from './orderRoutes.js';
 import { cleanTradingSettings } from '../src/core/tradingDesk.js';
 import { buildXlsx } from '../src/utils/exportStocks.js';
-import { cleanGapList, gapReportSheets, gapSummary, gapTradeRows } from '../src/utils/gapExits.js';
+import { cleanGapList, gapReportCsv, gapReportSheets, gapSummary, gapTradeRows } from '../src/utils/gapExits.js';
 
 /**
  * 09:20 trading routes (milestone 2: PAPER only; same-origin requests only).
@@ -15,7 +15,7 @@ import { cleanGapList, gapReportSheets, gapSummary, gapTradeRows } from '../src/
  * 9:15 gap entries (paper):
  *   GET/PUT /api/trading/gap-list                   { list: [{ symbol, side }], shadowScheduled }
  *   GET  /api/trading/gap-plan/:symbol?side=        the gap plan for one stock now
- *   GET  /api/trading/gap-report[?format=xlsx]      closed gap entries from every saved day, by gap type
+ *   GET  /api/trading/gap-report[?format=xlsx|csv]      closed gap entries from every saved day, by gap type
  */
 export function addTradingRoutes(app, desk, { settingsFile, log, gapListFile = null, paperDir = null }) {
   app.use('/api/trading', sameOriginOnly);
@@ -66,6 +66,9 @@ export function addTradingRoutes(app, desk, { settingsFile, log, gapListFile = n
     } catch { /* no paper days yet */ }
     const rows = gapTradeRows(ledgers);
     const summary = gapSummary(rows);
+    if (req.query.format === 'csv') {
+      return res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="gap-entries.csv"' }).send(`\uFEFF${gapReportCsv(rows)}`);
+    }
     if (req.query.format === 'xlsx') {
       const bytes = buildXlsx(gapReportSheets(rows, summary));
       return res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Content-Disposition': 'attachment; filename="gap-entries.xlsx"' }).send(Buffer.from(bytes));

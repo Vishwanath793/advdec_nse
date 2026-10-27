@@ -230,7 +230,8 @@ function GapReport() {
           <p className="hint">
             {report.rows.length} closed gap entries. Set the stop near the adverse move of trades that worked and the target near the typical favourable move,
             once there are enough days per gap type. Excursions after a backend restart start again from the restart.{' '}
-            <a className="btn ghost" href={api.trading.gapReportXlsxUrl()} download>Excel (trades + by gap type)</a>
+            <a className="btn ghost" href={api.trading.gapReportXlsxUrl()} download>Excel (trades + by gap type)</a>{' '}
+            <a className="btn ghost" href={api.trading.gapReportCsvUrl()} download>CSV (trades)</a>
           </p>
         </>
       )}

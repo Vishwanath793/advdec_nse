@@ -1,5 +1,5 @@
 import { decisionRow } from '../utils/decision.js';
-import { applyEvent, emptyLedger, gapOrderEvents, markToMarket, orderEvents, rebuildLedger, stepTick } from '../utils/paperLedger.js';
+import { applyEvent, emptyLedger, gapOrderEvents, markToMarket, orderEvents, rebuildLedger, sealedCheckTick, stepTick } from '../utils/paperLedger.js';
 
 /**
  * The paper broker: the ledger (utils/paperLedger.js) plus its files.
@@ -90,6 +90,20 @@ export function createPaperBroker({ store = null, log = null, ledger = 'day', ri
       const orders = gapOrderEvents(state, entries, { at, activeFrom, expiresAt });
       record(orders);
       return { orders: orders.length };
+    },
+    /**
+     * The seal: each open gap entry gets its 09:20 check from the sealed window (opening range,
+     * Kite's VWAP, the last price), on its latest book. Without a book yet, the first tick after 09:20 does it.
+     */
+    sealCheck(sealed) {
+      if (!state) return;
+      const at = Date.parse(sealed.sealedAt ?? '') || null;
+      if (!at) return;
+      for (const p of state.positions.filter((x) => x.status === 'OPEN' && x.strategy === 'gap915' && !x.check0920)) {
+        const last = lastTicks.get(p.token);
+        const s = sealed.stocks?.find((x) => x.token === p.token || x.symbol === p.symbol);
+        if (last && s?.orLow > 0) commit(stepTick(state, sealedCheckTick(last, s), at, risk(), { gap: gap(state.date) }));
+      }
     },
     /** Live (or replayed) ticks drive the simulated fills and exits once there are orders (9:15 gap entries, then the 09:20 decision). */
     onTicks(ticks, receivedAt, { squareOffAt = null } = {}) {
