@@ -403,6 +403,8 @@ setTimeout(indexAi, 30_000).unref();
 cron.schedule('45 19 * * *', indexAi, { timezone: 'Asia/Kolkata', name: 'ai-index' });
 
 app.use(express.static(fileURLToPath(new URL('../dist', import.meta.url))));
+// Kite's login redirect (the redirect URL shown in Settings): serve the app, which exchanges the request token.
+app.get('/kite/callback', (_req, res) => res.sendFile(fileURLToPath(new URL('../dist/index.html', import.meta.url))));
 // Errors (e.g. malformed JSON) as JSON, without stack traces.
 app.use((error, _req, res, _next) => {
   const raw = error.status ?? error.statusCode ?? 500;

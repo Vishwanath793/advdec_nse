@@ -40,6 +40,25 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-27: Kite login redirect works when the backend serves the app (Claude Code for vinayakb374, android-app, local commit)
+**Problem:** Settings tells you to set the Kite app's redirect URL to `<origin>/kite/callback`. That path only worked
+under the Vite dev server, which serves the app for any path. The backend serves the built app with
+`express.static` only, so logging in through `http://localhost:3002` ended on "Cannot GET /kite/callback". The
+backend never got a session, and the owner's 09:15 BUY 10 CHOICEIN (order S9, created at 09:12 from the in-app
+browser pane, which had no Kite login) failed with "Kite was not connected". Nothing reached Kite.
+
+**What changed:** `server/index.js` serves `dist/index.html` at `/kite/callback`. The page then exchanges the
+request token exactly as under Vite.
+
+**Tests / checks:**
+- `npm test`: 280 pass.
+- One full run had a single failure in the real-time spin test (`orderSender.test.js`). It passed 3 times alone and
+  on the next full run, so it looks load-sensitive.
+- With the backend restarted on :3002 (no pending orders, no session held), `/kite/callback` returns the app.
+- A `status=cancelled` redirect lands on Settings with "Kite login cancelled." and makes no token exchange.
+
+**Not verified:** a real login through the fixed path (the owner logs in next).
+
 ### 2026-10-26: AI Analyst tab: read-only, grounded Q&A with structured data and RAG (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** a new **AI Analyst** tab and an **Ask AI** button on each Analyzer row. It answers questions
 about one snapshot (why a conviction score, why a filter pass/fail, comparisons, exact numeric screens, missing or
