@@ -4,7 +4,7 @@ import { createKiteClient, redactSecrets } from '../src/core/kite.js';
 import { createKiteTicker, MAX_FAILED_OPENS, MAX_TOKENS_PER_CONNECTION, SILENCE_LIMIT_MS } from '../src/core/kiteTicker.js';
 import { encodeTickerMessage } from '../src/core/kiteTicks.js';
 import { compactInstruments, createInstrumentService, instrumentIndex } from '../src/core/instruments.js';
-import { atrFromDayCandles, createHistoryService, createRateLimiter, openingVolumeAverage } from '../src/core/kiteHistory.js';
+import { atrFromDayCandles, createHistoryService, createRateLimiter, openingVolumeAverage, previousDayFromCandles } from '../src/core/kiteHistory.js';
 import { readCalendar } from './tv/calendar.js';
 
 const calendar = readCalendar();
@@ -190,6 +190,9 @@ test('history: ATR from completed days only, opening-volume average, pacing at 3
   const r = await svc.load([{ symbol: 'INFY', token: 1, futureToken: 2 }, { symbol: 'TCS', token: 3 }], { apiKey: 'k', accessToken: 't' });
   assert.equal(r.history.INFY.prevOi, 1_234_000);
   assert.equal(r.history.INFY.openVol5Avg, 1000);
+  assert.deepEqual(r.history.INFY.prevDay, { date: '2026-09-25', high: 103, low: 98 }, 'the last completed daily candle');
+  assert.equal(previousDayFromCandles(withToday, today).date, '2026-09-25', 'today\'s candle is ignored');
+  assert.equal(previousDayFromCandles([], today), null);
   assert.equal(r.history.TCS.prevOi, null);
   assert.equal(calls, 5);
   await svc.load([{ symbol: 'INFY', token: 1 }], { apiKey: 'k', accessToken: 't' });

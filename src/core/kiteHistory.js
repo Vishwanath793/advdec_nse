@@ -18,7 +18,7 @@ export const ATR_PERIOD = 14;
 /** 20 completed sessions, the same look-back as the other research comparisons. */
 export const OPENING_VOLUME_DAYS = 20;
 /** Bump when the cached fields change, so older cache entries are fetched again. */
-const HISTORY_VERSION = 2;
+const HISTORY_VERSION = 3;
 const file = (date) => `history/${date}.json`;
 const ist = (d) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
 
@@ -33,6 +33,12 @@ export function atrFromDayCandles(candles, today, period = ATR_PERIOD) {
     trs.push(Math.max(h - l, Math.abs(h - prevClose), Math.abs(l - prevClose)));
   }
   return trs.reduce((a, b) => a + b, 0) / trs.length;
+}
+
+/** The last completed daily candle before `today`: { date, high, low } (the 9:15 gap plan's previous-day levels), or null. */
+export function previousDayFromCandles(candles, today) {
+  const last = candles.filter(([t]) => indiaDate(t) < today).at(-1);
+  return last && last[2] > 0 && last[3] > 0 ? { date: indiaDate(last[0]), high: last[2], low: last[3] } : null;
 }
 
 /** Per session before `today` with all five 09:15–09:19 1-minute candles: volume, value (₹) and range (% of the open). */
@@ -104,10 +110,11 @@ export function createHistoryService({ store, kite, calendar, now = () => new Da
     const errors = [];
     const call = (args) => limiter.run(() => kite.historical({ apiKey, accessToken, ...args }));
     for (const item of missing) {
-      const out = { v: HISTORY_VERSION, atr14: null, openVol5Avg: null, openValueAvg: null, openRangePctAvg: null, openVolDays: 0, prevOi: null };
+      const out = { v: HISTORY_VERSION, atr14: null, openVol5Avg: null, openValueAvg: null, openRangePctAvg: null, openVolDays: 0, prevOi: null, prevDay: null };
       try {
         const daily = await call({ token: item.token, interval: 'day', from: `${days[0]} 00:00:00`, to: `${days.at(-1)} 23:59:59` });
         out.atr14 = atrFromDayCandles(daily, today);
+        out.prevDay = previousDayFromCandles(daily, today);
         const firstOpenDay = days.at(-OPENING_VOLUME_DAYS);
         const minutes = await call({ token: item.token, interval: 'minute', from: `${firstOpenDay} 09:15:00`, to: `${days.at(-1)} 09:20:00` });
         const ov = openingWindowAverages(minutes, today);

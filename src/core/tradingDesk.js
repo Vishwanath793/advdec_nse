@@ -30,16 +30,19 @@ export const DEFAULT_TRADING_SETTINGS = {
 
 /** Plan inputs for one stock from the collector's instrument meta, with where each comes from. */
 export function gapInputsFromMeta(m, { symbol, side }) {
+  // Previous high/low: Kite's previous completed daily candle, else the 09:10 analyzer data (labelled).
+  const kite = m.kitePrevDay;
   return {
     symbol, side, prevClose: m.prevClose, open: m.preOpenPrice, atr: m.atr14 ?? null, tick: m.tick ?? null, lot: m.lot ?? 1,
-    upperCircuit: m.upperCircuit ?? null, lowerCircuit: m.lowerCircuit ?? null, prevHigh: m.prevHigh ?? null, prevLow: m.prevLow ?? null,
+    upperCircuit: m.upperCircuit ?? null, lowerCircuit: m.lowerCircuit ?? null,
+    prevHigh: kite?.high ?? m.prevHigh ?? null, prevLow: kite?.low ?? m.prevLow ?? null,
     sources: {
       prevClose: m.prevCloseMismatch ? 'Kite /quote ohlc.close (NSE differed)' : 'NSE pre-open (09:10 import), checked against Kite /quote',
       open: 'NSE pre-open final price (09:10 import)',
       atr: m.atr14 ? 'ATR(14) from Kite daily candles' : 'missing: estimated from the previous close',
       tick: m.tick ? 'Kite instruments' : 'default ₹0.05',
       circuit: m.upperCircuit ? 'Kite /quote circuit limits (else NSE price bands)' : 'not known',
-      prevHigh: m.prevHigh ? '09:10 analyzer data (previous session)' : 'not known',
+      prevHigh: kite ? `Kite daily candle of ${kite.date}` : m.prevHigh ? '09:10 analyzer data (Kite daily candle missing)' : 'not known',
     },
   };
 }

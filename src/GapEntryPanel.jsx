@@ -20,6 +20,8 @@ const TYPE_INFO = {
   extreme: '1.5 ATR or more: quarter size, trail after T1',
 };
 
+const TRAIL_TITLE = 'No fixed T2: after T1 the second half trails below the last completed 5-minute bar (approximate: built from ticks), or by ATR if chosen in Settings.';
+
 function sourcesTitle(plan) {
   const s = plan?.sources ?? {};
   return Object.entries(s).map(([k, v]) => `${k}: ${v}`).join('\n');
@@ -37,7 +39,7 @@ function PlanCells({ plan }) {
       <td className="num" title={plan.estimatedEntry ? 'estimate: the open plus slippage' : ''}>{f2(plan.entry)}</td>
       <td className="num">{f2(plan.sl)}</td>
       <td className="num">{f2(plan.t1)}</td>
-      <td className="num">{plan.t2 != null ? f2(plan.t2) : <span className="hint">trail</span>}</td>
+      <td className="num">{plan.t2 != null ? f2(plan.t2) : <span className="hint" title={TRAIL_TITLE}>trail</span>}</td>
       <td className="num">{plan.rewardRisk != null ? f2(plan.rewardRisk) : '—'}</td>
     </>
   );
@@ -163,7 +165,7 @@ export function GapEntryPanel() {
                       <td className="num" title={o.plan ? `planned ${f2(o.plan.entry)}` : ''}>{f2(p?.avgEntry)}</td>
                       <td className="num" title={p?.stopReason ?? (lv ? 'from the fill' : '')}>{f2(p?.stop ?? o.stop)}{p?.stopReason ? <span className="hint"> ({p.stopReason})</span> : ''}</td>
                       <td className="num">{f2(lv?.t1 ?? o.target1)}</td>
-                      <td className="num">{(lv ? lv.t2 : o.target2) != null ? f2(lv ? lv.t2 : o.target2) : <span className="hint">trail</span>}</td>
+                      <td className="num">{(lv ? lv.t2 : o.target2) != null ? f2(lv ? lv.t2 : o.target2) : <span className="hint" title={TRAIL_TITLE}>trail</span>}</td>
                       <td className="hint">{p?.check0920 ? (p.check0920.failed ? 'failed: exited' : `passed (range low ${f2(p.check0920.orLow)}, VWAP ${f2(p.check0920.vwap)})`) : '—'}</td>
                       <td>
                         {p?.exits.map((x) => `${x.qty} @ ${f2(x.price)} ${x.reason} ${time(x.at)}`).join('; ') || '—'}

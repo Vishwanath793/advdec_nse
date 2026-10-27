@@ -347,7 +347,10 @@ const tradingDesk = createTradingDesk({
     return s ? {
       symbol, side, prevClose: s.prevClose, open: s.finalPrice, atr: null, upperCircuit: s.upperCircuit ?? null, lowerCircuit: s.lowerCircuit ?? null,
       prevHigh: s.prevHigh ?? null, prevLow: s.prevLow ?? null,
-      sources: { prevClose: 'NSE pre-open (09:10 import)', open: 'NSE pre-open final price (09:10 import)', atr: 'missing until the opening universe loads: estimated', tick: 'default ₹0.05', circuit: 'NSE price bands' },
+      sources: {
+        prevClose: 'NSE pre-open (09:10 import)', open: 'NSE pre-open final price (09:10 import)', atr: 'missing until the opening universe loads: estimated',
+        tick: 'default ₹0.05', circuit: 'NSE price bands', prevHigh: '09:10 analyzer data (Kite\'s daily candle loads with the opening universe)',
+      },
     } : null;
   },
 });

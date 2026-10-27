@@ -214,7 +214,7 @@ function GapExitFields({ g, set }) {
         <label className="field-inline">Time stop (IST)<input type="time" value={g.timeStopAt} onChange={(e) => field('timeStopAt', e.target.value)} /></label>
         <label className="field-inline">Trail the second half
           <select value={g.trail} onChange={(e) => field('trail', e.target.value)}>
-            <option value="5min">Below the last completed 5-minute bar</option>
+            <option value="5min">Below the last completed 5-minute bar (approximate: built from ticks)</option>
             <option value="atr">ATR distance from the best price</option>
           </select>
         </label>

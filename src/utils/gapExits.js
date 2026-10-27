@@ -286,6 +286,8 @@ export const BAR_MS = 5 * 60_000;
 
 /**
  * Follow 5-minute bars from prices (IST 5-minute boundaries line up with UTC ones).
+ * Approximate: built from the ticks received (sampled last prices), so a bar's true high or
+ * low between two ticks can be missed. Labelled as such wherever the trail is shown.
  * Returns the updated bar state and the bar that just completed, if any.
  */
 export function updateBar(bar, price, at) {

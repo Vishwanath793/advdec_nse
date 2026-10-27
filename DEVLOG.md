@@ -40,6 +40,29 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-27: 9:15 gap entry: Kite's previous-day high/low; trail bars labelled approximate (Claude Code for vinayakb374, android-app, local commit)
+**What changed:**
+- The gap plan's previous-day high/low (the T2 cap) now come from Kite's previous completed daily candle.
+  - `previousDayFromCandles` in `src/core/kiteHistory.js`, cached as `prevDay`; the history cache version went
+    from 2 to 3, so today's cache is fetched again.
+  - The collector stores it as `kitePrevDay`.
+  - It falls back to the 09:10 analyzer values, labelled. The 09:20 system's `prevHigh`/`prevLow` are unchanged.
+- The 5-minute trail bars are labelled "approximate: built from ticks" in the stop reason, the Settings option and
+  the "trail" tooltip.
+
+**Files:** `src/core/kiteHistory.js`, `src/core/openingCollector.js`, `src/core/tradingDesk.js`, `server/index.js`,
+`src/utils/gapExits.js`, `src/utils/paperLedger.js`, `src/TradingPanel.jsx`, `src/GapEntryPanel.jsx`,
+`server/kiteData.test.js`, `server/gapExits.test.js`.
+
+**Tests / checks:**
+- npm test: 300 pass.
+- npm run build and npx cap sync android pass.
+- Restarted the :3002 backend at 18:03 IST; no scheduled order was pending.
+- The simulated replay matched the earlier run (5 trades, ₹189.25 net), and ORBDN's stop shows the approximate
+  label on the Orders card. No console errors.
+
+**Not verified:** Kite's daily candle as the previous high/low in a live morning (the replay has no Kite history).
+
 ### 2026-10-27: 9:15 gap entry, phase 1 (PAPER) (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** A paper market entry at 09:15 for the stocks on a "gap list". The gap (in ATR) sets the size,
 the stop and the targets. It always enters; the gap only makes the size smaller. Spec: [docs/prompt-915-gap-exits.md](docs/prompt-915-gap-exits.md)

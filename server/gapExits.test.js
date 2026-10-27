@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { istInstant } from '../src/core/calendar.js';
-import { createTradingDesk } from '../src/core/tradingDesk.js';
+import { createTradingDesk, gapInputsFromMeta } from '../src/core/tradingDesk.js';
 import {
   breakevenStop, check0920, cleanGapExitSettings, cleanGapList, gapEntriesFor, gapExitPlan, gapSummary, gapTradeRows, gapType, ratchetStop,
   replanAfterFill, timeStopDue, trailCandidate, updateBar,
@@ -305,6 +305,18 @@ test('gap list: cleaned; scheduled 09:15 market orders are shadowed only when on
   assert.equal(JSON.stringify(scheduled), copy, 'the scheduled orders are only read');
 });
 
+test('previous high/low: Kite\'s previous daily candle first, the 09:10 data only as a labelled fallback', () => {
+  const m = { prevClose: 1000, preOpenPrice: 1012, atr14: 30, prevHigh: 1010, prevLow: 990 };
+  const kite = gapInputsFromMeta({ ...m, kitePrevDay: { date: '2026-10-16', high: 1025, low: 995 } }, { symbol: 'X', side: 'BUY' });
+  assert.deepEqual([kite.prevHigh, kite.prevLow, kite.sources.prevHigh], [1025, 995, 'Kite daily candle of 2026-10-16']);
+  const fallback = gapInputsFromMeta(m, { symbol: 'X', side: 'BUY' });
+  assert.deepEqual([fallback.prevHigh, fallback.prevLow], [1010, 990]);
+  assert.match(fallback.sources.prevHigh, /09:10 analyzer data \(Kite daily candle missing\)/);
+  // The Kite high caps T2 (open 1012 is below it): T2 = previous high.
+  const p = gapExitPlan({ ...kite, entry: 1012.5 }, {}, RISK);
+  assert.equal(p.t2, 1025);
+});
+
 test('desk: onStart plans the gap list from the opening meta and places the paper orders; plan lookup for the Orders page', async () => {
   const meta = {
     7: { kind: 'stock', symbol: 'X', prevClose: 1000, preOpenPrice: 1012, atr14: 30, tick: 0.05, lot: 1, upperCircuit: 1200, lowerCircuit: 800 },
@@ -328,6 +340,7 @@ test('desk: onStart plans the gap list from the opening meta and places the pape
   assert.equal(logged.filter((e) => e.type === 'order').length, 1, 'written to the day log');
   assert.equal((await desk.onStart({ date: D, meta })).orders, 0, 'a second start places nothing new');
   assert.equal((await desk.gapPlanFor('X')).from, 'opening universe');
+  assert.equal(v.gapEntries.plans[0].plan.sources.prevHigh, 'not known');
   const y = await desk.gapPlanFor('Y');
   assert.equal(y.from, 'pre-open row');
   assert.equal(y.atrEstimated, true);

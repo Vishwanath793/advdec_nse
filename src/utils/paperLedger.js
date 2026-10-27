@@ -386,7 +386,7 @@ function stepGap(state, p, tick, at, { touch, exitAll, emit, iso, gap }) {
   if (p.t1Done && p.target2 == null) {
     const cand = trailCandidate({ d, completedBar: completed, best: p.best, atr, tick: ptick }, cfg);
     const next = cand == null ? p.stop : ratchetStop(d, p.stop, cand, touch);
-    if (next !== p.stop) emit({ type: 'stop', positionId: p.id, stop: next, reason: `trail (${cfg.trail === 'atr' ? `${cfg.trailAtr} ATR from the best price` : 'last 5-minute bar'})`, at: iso });
+    if (next !== p.stop) emit({ type: 'stop', positionId: p.id, stop: next, reason: `trail (${cfg.trail === 'atr' ? `${cfg.trailAtr} ATR from the best price` : 'last 5-minute bar, approximate: built from ticks'})`, at: iso });
   }
 }
 

@@ -173,6 +173,8 @@ export function createOpeningCollector({
         const hx = h[s.symbol];
         if (!hx) continue;
         m.atr14 = hx.atr14;
+        // Kite's previous completed daily candle (the 9:15 gap plan's previous high/low; prevHigh/prevLow above stay the 09:10 data's).
+        m.kitePrevDay = hx.prevDay ?? null;
         m.openVol5Avg = hx.openVol5Avg;
         m.openValueAvg = hx.openValueAvg ?? null;
         m.openRangePctAvg = hx.openRangePctAvg ?? null;
