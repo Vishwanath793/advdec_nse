@@ -212,7 +212,12 @@ test('a replay hands the seal and the later ticks to the trading desk (replay le
   await h.advanceTo(ist('16:00:30'));
   const v = desk.view('replay');
   assert.equal(v.decisions.length, 13);
-  assert.equal(v.ledgerState.trades, 2);
+  // The two 09:20 trades, plus the demo 9:15 gap entries (LOCKED has no sellers and never fills).
+  assert.equal(v.ledgerState.trades - v.ledgerState.gap.trades, 2);
+  assert.equal(v.ledgerState.gap.trades, 5);
+  const locked = v.ledgerState.orders.find((o) => o.symbol === 'LOCKED' && o.strategy === 'gap915');
+  assert.equal(locked.filledQty, 0, 'no sellers at the upper circuit: never filled');
+  assert.equal(locked.status, 'CANCELLED', 'cancelled when the replay ended (before the 09:30 entry window)');
   assert.equal(v.ledgerState.positions.every((p) => p.status === 'CLOSED'), true, 'everything closed by the end of the replay');
   assert.equal(h.collector.status().message, 'Replay finished.');
   assert.equal(files.size, 0);

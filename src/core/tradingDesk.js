@@ -4,6 +4,8 @@ import { cleanScoringSettings, decideOpening, decisionRow, DEFAULT_SCORING_SETTI
 import { ledgerDay } from '../utils/paperLedger.js';
 import { cleanRiskSettings, DEFAULT_RISK_SETTINGS, tradeBlockers } from '../utils/risk.js';
 import { DEFAULT_STRATEGY_SETTINGS, strategySettings } from '../utils/strategies.js';
+import { cleanGapExitSettings, DEFAULT_GAP_EXIT_SETTINGS, gapExitPlan } from '../utils/gapExits.js';
+import { SIMULATED_DATE, SIMULATED_GAP_LIST } from '../utils/simulatedMorning.js';
 
 /**
  * The 09:20 trading desk (milestone 2: PAPER only).
@@ -14,13 +16,33 @@ import { DEFAULT_STRATEGY_SETTINGS, strategySettings } from '../utils/strategies
  * switch). Two ledgers: `day` (today, saved under .data/paper/) and `replay`
  * (the simulated or recorded replay, in memory only).
  *
+ * The 9:15 gap entries (utils/gapExits.js) use the same ledgers: when the collector
+ * starts the day (onStart, 09:14), each stock on the gap list gets a paper market
+ * order active from 09:15:00, sized and levelled from its gap.
+ *
  * LIVE execution is milestone 4 and doesn't exist here: the mode is always PAPER.
  */
 
 export const TRADING_MODES = ['BACKTEST', 'PAPER', 'LIVE'];
 export const DEFAULT_TRADING_SETTINGS = {
-  mode: 'PAPER', risk: DEFAULT_RISK_SETTINGS, strategies: DEFAULT_STRATEGY_SETTINGS, scoring: DEFAULT_SCORING_SETTINGS,
+  mode: 'PAPER', risk: DEFAULT_RISK_SETTINGS, strategies: DEFAULT_STRATEGY_SETTINGS, scoring: DEFAULT_SCORING_SETTINGS, gapExits: DEFAULT_GAP_EXIT_SETTINGS,
 };
+
+/** Plan inputs for one stock from the collector's instrument meta, with where each comes from. */
+export function gapInputsFromMeta(m, { symbol, side }) {
+  return {
+    symbol, side, prevClose: m.prevClose, open: m.preOpenPrice, atr: m.atr14 ?? null, tick: m.tick ?? null, lot: m.lot ?? 1,
+    upperCircuit: m.upperCircuit ?? null, lowerCircuit: m.lowerCircuit ?? null, prevHigh: m.prevHigh ?? null, prevLow: m.prevLow ?? null,
+    sources: {
+      prevClose: m.prevCloseMismatch ? 'Kite /quote ohlc.close (NSE differed)' : 'NSE pre-open (09:10 import), checked against Kite /quote',
+      open: 'NSE pre-open final price (09:10 import)',
+      atr: m.atr14 ? 'ATR(14) from Kite daily candles' : 'missing: estimated from the previous close',
+      tick: m.tick ? 'Kite instruments' : 'default ₹0.05',
+      circuit: m.upperCircuit ? 'Kite /quote circuit limits (else NSE price bands)' : 'not known',
+      prevHigh: m.prevHigh ? '09:10 analyzer data (previous session)' : 'not known',
+    },
+  };
+}
 
 /** Numbers stay numbers, booleans booleans; anything else falls back to the default. */
 function cleanStrategies(input = {}) {
@@ -39,25 +61,60 @@ export function cleanTradingSettings(input = {}) {
     risk: cleanRiskSettings(input?.risk ?? {}),
     strategies: cleanStrategies(input?.strategies ?? {}),
     scoring: cleanScoringSettings(input?.scoring ?? {}),
+    gapExits: cleanGapExitSettings(input?.gapExits ?? {}),
   };
 }
 
+/**
+ * `gapList(date)`: today's 9:15 gap entries [{ symbol, side, source }] (the saved list, plus
+ * paper shadows of scheduled 09:15 market orders when that is on).
+ * `gapFallback(symbol)`: plan inputs for a stock outside the collector's universe (or null).
+ */
 export function createTradingDesk({
   store, log, calendar, settings = () => DEFAULT_TRADING_SETTINGS, now = () => new Date(),
   setTimer = setTimeout, clearTimer = clearTimeout, onUpdate = () => {},
+  gapList = async () => [], gapFallback = async () => null,
 }) {
   const cfg = () => cleanTradingSettings(settings());
   const changed = () => { try { onUpdate(); } catch { /* ignore */ } };
+  const at = (date, time) => +istInstant(date, time);
+  const gapTiming = (date) => ({ settings: cfg().gapExits, checkAt: at(date, '09:20'), timeStopAt: at(date, cfg().gapExits.timeStopAt) });
   const brokers = {
-    day: createPaperBroker({ store, log, ledger: 'day', risk: () => cfg().risk, onChange: changed, now }),
-    replay: createPaperBroker({ ledger: 'replay', risk: () => cfg().risk, onChange: changed, now }),
+    day: createPaperBroker({ store, log, ledger: 'day', risk: () => cfg().risk, gap: gapTiming, onChange: changed, now }),
+    replay: createPaperBroker({ ledger: 'replay', risk: () => cfg().risk, gap: gapTiming, onChange: changed, now }),
   };
   const decisions = { day: null, replay: null };
+  const gapPlans = { day: [], replay: [] };
+  const metas = { day: null, replay: null };
+  let replayStarted = false;
   let links = { follow: () => {}, unfollow: () => {} };
   let squareOffTimer = null;
   let lastReconcile = null;
 
-  const at = (date, time) => +istInstant(date, time);
+  /** Plan every gap-list stock from the instrument meta and place the paper market orders (before the entry window ends). */
+  async function startGap(date, meta, ledger) {
+    const s = cfg();
+    const bySymbol = new Map(Object.entries(meta ?? {}).filter(([, m]) => m.kind === 'stock').map(([token, m]) => [m.symbol, { token: Number(token), m }]));
+    metas[ledger] = bySymbol;
+    let list = (await gapList(date)) ?? [];
+    if (ledger === 'replay') {
+      list = list.filter((e) => bySymbol.has(e.symbol));
+      if (!list.length && date === SIMULATED_DATE) list = SIMULATED_GAP_LIST;
+    }
+    const seen = new Set();
+    gapPlans[ledger] = list.filter((e) => !seen.has(e.symbol) && seen.add(e.symbol)).map((e) => {
+      const hit = bySymbol.get(e.symbol);
+      if (!hit) return { ...e, plan: null, error: 'not in today\'s opening universe (no 09:10 pre-open row, or not in Kite\'s instruments)' };
+      const plan = gapExitPlan(gapInputsFromMeta(hit.m, e), s.gapExits, s.risk);
+      return { ...e, token: hit.token, plan, error: plan.ok ? null : plan.error };
+    });
+    const until = at(date, s.risk.entryUntil);
+    if (ledger === 'day' && +now() >= until) return { orders: 0, skipped: `after ${s.risk.entryUntil}: no gap entries placed` };
+    const placedAt = ledger === 'replay' ? at(date, '09:14') : Math.min(+now(), at(date, '09:15'));
+    return brokers[ledger].placeGap(gapPlans[ledger].filter((x) => x.plan?.ok), {
+      at: new Date(placedAt).toISOString(), activeFrom: new Date(at(date, '09:15')).toISOString(), expiresAt: new Date(until).toISOString(),
+    });
+  }
 
   function armSquareOff(date) {
     if (squareOffTimer) clearTimer(squareOffTimer);
@@ -96,6 +153,7 @@ export function createTradingDesk({
       dailyLossLimit: (s.risk.capital * s.risk.dailyLossPct) / 100,
       decisions: state?.decision?.rows ?? decisions[ledger]?.decisions.map(decisionRow) ?? [],
       gapReport: state?.decision?.gapReport ?? decisions[ledger]?.gapReport ?? [],
+      gapEntries: { plans: gapPlans[ledger], totals: state?.gap ?? null },
       reconcile: ledger === 'day' ? lastReconcile : null,
     };
   }
@@ -104,11 +162,28 @@ export function createTradingDesk({
     /** The collector's follow/unfollow, so open positions keep streaming after 09:30. */
     attach(l) { links = { ...links, ...l }; },
 
+    /**
+     * Called by the collector when it starts the day (connecting at 09:14, or a replay):
+     * the 9:15 gap entries are planned and their paper market orders placed.
+     */
+    async onStart({ date, meta, replay = false }) {
+      const ledger = replay ? 'replay' : 'day';
+      if (replay) { brokers.replay.reset(date); replayStarted = true; } else {
+        lastReconcile = await brokers.day.load(date);
+        armSquareOff(date);
+      }
+      const result = await startGap(date, meta, ledger);
+      changed();
+      return result;
+    },
+
     /** Called by the collector when the window seals. */
     async onSeal(sealed, { replay = false, partial = false } = {}) {
       const ledger = replay ? 'replay' : 'day';
-      if (replay) brokers.replay.reset(sealed.date);
-      else {
+      if (replay) {
+        if (!replayStarted || brokers.replay.state?.date !== sealed.date) brokers.replay.reset(sealed.date);
+        replayStarted = false;
+      } else {
         lastReconcile = await brokers.day.load(sealed.date);
         armSquareOff(sealed.date);
       }
@@ -156,6 +231,18 @@ export function createTradingDesk({
     closeAll(ledger = 'day') { brokers[ledger].closeAll('square off all (manual)'); changed(); return view(ledger); },
 
     view,
+
+    /**
+     * The 9:15 gap plan for one stock now (for the Orders page): from today's opening
+     * universe when the stock is in it, else from `gapFallback` (the 09:10 pre-open row).
+     */
+    async gapPlanFor(symbol, side = 'BUY') {
+      const s = cfg();
+      const hit = metas.day?.get(symbol);
+      const inputs = hit ? gapInputsFromMeta(hit.m, { symbol, side }) : await gapFallback(symbol, side);
+      if (!inputs) return null;
+      return { ...gapExitPlan(inputs, s.gapExits, s.risk), from: hit ? 'opening universe' : 'pre-open row' };
+    },
 
     /** The full decision for one stock (factors, strategy checks, plan). */
     decisionDetail(symbol, ledger = 'day') {

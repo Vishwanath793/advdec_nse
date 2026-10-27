@@ -40,6 +40,52 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-27: 9:15 gap entry, phase 1 (PAPER) (Claude Code for vinayakb374, android-app, local commit)
+**What changed:** A paper market entry at 09:15 for the stocks on a "gap list". The gap (in ATR) sets the size,
+the stop and the targets. It always enters; the gap only makes the size smaller. Spec: [docs/prompt-915-gap-exits.md](docs/prompt-915-gap-exits.md)
+(phase 2, LIVE exits, is **not** started).
+- Gap types: flat < 0.2 ≤ normal < 0.8 ≤ large < 1.5 ≤ extreme. Size × 1 / 1 / 0.5 / 0.25, × 0.5 near the circuit,
+  × 0.5 for a fixed-target plan under the minimum reward/risk, × 0.5 when ATR is missing (estimated at 2%).
+  Never below 0.25, never under one share.
+- Stop: max(0.35 ATR, just below the half-gap fill) for flat/normal, 0.5 ATR for large/extreme, at most 0.6 ATR.
+  T1 1 R (half out, stop to breakeven + costs); T2 = min(2.5 R, 1.3 ATR − gap, previous high) for flat/normal,
+  else trail (last 5-minute bar, or ATR). Levels re-planned from the fill.
+- 09:20 check (stop to the opening-range low − 0.05 ATR; exit if below VWAP and the open), time stop 09:45
+  (under 0.5 R and no T1), square-off, kill switch.
+- Same ledger as the 09:20 system (strategy `gap915`, order id `date-symbol-gap915`, tag `P915…`). It doesn't use the
+  09:20 slots or the losing streak. Its P&L counts towards the daily loss and is also totalled in `state.gap`.
+- Orders page: "9:15 gap entry" card (gap list, plans, positions after the fill, check a stock, report by gap type
+  with Excel). The scheduled-order form shows the gap plan's quantity for a 09:15 market order (display only).
+  Settings: the numbers. The scanner chart draws the 9:15 levels.
+- Optional read-only paper shadow of scheduled MARKET orders sent 09:15:00–09:15:59 (off by default; the real order
+  is never changed). The collector always watches the gap-list stocks.
+- The simulated replay uses demo gap entries (MOMO, ORBUP, ORBDN short, DEADCAT, GAPPULL, LOCKED) when none of the
+  saved list is in it.
+
+**Files:** new `src/utils/gapExits.js`, `src/GapEntryPanel.jsx`, `server/gapExits.test.js`, `docs/prompt-915-gap-exits.md`;
+`src/utils/paperLedger.js`, `src/core/paperBroker.js`, `src/core/tradingDesk.js`, `src/core/openingCollector.js`
+(onStart hook; replays pass every tick to the desk), `src/utils/simulatedMorning.js`, `server/tradingRoutes.js`,
+`server/index.js`, `src/platform/web.js`, `src/OrdersPage.jsx`, `src/TradingPanel.jsx`, `src/OpeningChart.jsx`,
+`src/OpeningScanner.jsx`, `src/styles.css`, `server/openingCollector.test.js`, `package.json`.
+`server/index.js` and `src/platform/web.js` are also in the paused milestone 3 row. These are additive edits in
+other sections; there were no uncommitted changes in them. `src/ReportCardPage.jsx` was left alone, so the gap
+report is on the Orders page.
+
+**Tests / checks:** npm test (299 pass, 19 new in `server/gapExits.test.js`), npm run build, npx cap sync android,
+`node --check server/index.js`.
+
+**Not verified:**
+- Nothing has run in market hours.
+- **No browser check and no backend run.** A backend was already running on :3002 (another session), and a
+  second backend would run a second order scheduler on the same `.data`.
+- **The running :3002 backend has the old code.** It needs a restart before the gap list can be saved or any gap
+  entry is placed.
+- The Kite tick fields used at 09:20 (day low/high, average price) are as documented for full mode; they haven't
+  been checked live.
+
+**Next / open questions:** Restart the backend, save a gap list, run the simulated replay (Confirm page) and check the
+Orders card. Phase 2 (LIVE SL-M/IOC exits on scheduled 09:15 orders) waits for the owner's go-ahead after a paper period.
+
 ### 2026-10-27: Kite login redirect works when the backend serves the app (Claude Code for vinayakb374, android-app, local commit)
 **Problem:** Settings tells you to set the Kite app's redirect URL to `<origin>/kite/callback`. That path only worked
 under the Vite dev server, which serves the app for any path. The backend serves the built app with

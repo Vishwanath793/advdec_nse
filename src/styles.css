@@ -689,6 +689,12 @@ body {
 .field-inline { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 0.8rem; }
 .field-inline input, .field-inline select { padding: 5px 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
 .trading-settings h4 { margin: 14px 0 6px; }
+.gap-entry details { margin: 10px 0; }
+.gap-entry summary { cursor: pointer; font-weight: 600; }
+.gap-list-rows { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.gap-list-row, .gap-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.gap-entry input:not([type]), .gap-entry select { padding: 5px 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+.gap-check { margin: 12px 0 6px; }
 .reasons-cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 0.8rem; }
 .decision-detail { margin: 8px 0 14px; }
 .decision-detail ul.reasons, .opening-detail ul.reasons { margin: 4px 0 8px; padding-left: 18px; font-size: 0.85rem; }

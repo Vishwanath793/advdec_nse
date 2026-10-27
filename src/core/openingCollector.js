@@ -196,6 +196,8 @@ export function createOpeningCollector({
   function connect() {
     if (!day?.window || day.ticker || !session?.accessToken || day.replay) return;
     if (tickLog) tickLog.open(day.date, { meta: day.meta });
+    // The trading desk places the 9:15 gap entries (paper) before the first tick of the session.
+    Promise.resolve(trading?.onStart?.({ date: day.date, meta: day.meta, replay: false })).catch((error) => { day.tradingError = safe(`9:15 gap entries failed: ${error.message}`); });
     day.ticker = createKiteTicker({
       ...session, WebSocketImpl, now: () => +now(), setTimer, clearTimer,
       onTicks: (ticks, receivedAt) => {
@@ -282,6 +284,7 @@ export function createOpeningCollector({
       stocks: Object.values(meta).filter((m) => m.kind === 'stock'), indices: Object.values(meta).filter((m) => m.kind === 'index'),
       futures: Object.values(meta).filter((m) => m.kind === 'future'), missing: [],
     };
+    Promise.resolve(trading?.onStart?.({ date, meta, replay: true })).catch((error) => { day.tradingError = `9:15 gap entries failed: ${error.message}`; });
     let i = 0;
     const sealVirtual = window.sealAt + SEAL_GRACE_MS;
     const step = () => {
@@ -290,7 +293,8 @@ export function createOpeningCollector({
       while (i < ticks.length && ticks[i].receivedAt <= v) {
         if (!day.sealed && ticks[i].receivedAt >= sealVirtual) break;
         window.ingest(ticks[i].tick, ticks[i].receivedAt);
-        if (day.sealed) trading?.onTicks([ticks[i].tick], ticks[i].receivedAt, { replay: true });
+        // Every tick goes to the replay ledger: the 9:15 gap entries fill from 09:15, the 09:20 orders after the seal.
+        trading?.onTicks([ticks[i].tick], ticks[i].receivedAt, { replay: true });
         i++;
       }
       if (!day.sealed && v >= sealVirtual) {

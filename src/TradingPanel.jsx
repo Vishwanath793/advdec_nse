@@ -103,8 +103,8 @@ export function TradingPanel() {
           <span>Realised <strong className={tone(st?.realised)}>{rs(st?.realised ?? 0)}</strong></span>
           <span>Unrealised <strong className={tone(st?.unrealised)}>{rs(st?.unrealised ?? 0)}</strong> <span className="hint">(at bid/ask)</span></span>
           <span>Charges <strong>{rs(st?.charges ?? 0)}</strong></span>
-          <span>Trades <strong>{st?.trades ?? 0}</strong>/{r.maxTradesPerDay} · W/L {st?.wins ?? 0}/{st?.losses ?? 0}</span>
-          <span>Open <strong>{open.length + pending.length}</strong>/{r.maxOpenPositions}</span>
+          <span title="09:20 trades; the 9:15 gap entries don't use these slots">Trades <strong>{(st?.trades ?? 0) - (st?.gap?.trades ?? 0)}</strong>/{r.maxTradesPerDay} · W/L {st?.wins ?? 0}/{st?.losses ?? 0}</span>
+          <span title="09:20 positions and entries; the 9:15 gap entries don't use these slots">Open <strong>{[...open, ...pending].filter((x) => x.strategy !== 'gap915').length}</strong>/{r.maxOpenPositions}</span>
         </div>
       )}
       {r && (
@@ -184,6 +184,45 @@ const RISK_FIELDS = [
 ];
 const LABELS = { orb: 'A. Opening-range breakout / breakdown', gapPullback: 'B. Gap-up pullback recovery (≥ 3.75% gap)', momentum: 'C. Opening momentum' };
 
+const GAP_FIELDS = [
+  ['noiseAtr', 'Noise stop floor (× ATR)'], ['gapLineBufferAtr', 'Buffer below the half-gap (× ATR)'], ['wideStopAtr', 'Large/extreme stop (× ATR)'], ['maxStopAtr', 'Widest stop (× ATR)'],
+  ['t1R', 'Target 1 (R)'], ['t2R', 'Target 2 cap (R)'], ['rangeAtr', 'Day range for T2 room (× ATR)'], ['circuitTicks', 'Ticks inside the circuit'],
+  ['nearCircuitPct', 'Near the circuit (%)'], ['nearCircuitFactor', 'Near-circuit size ×'], ['weakRrFactor', 'Weak reward/risk size ×'], ['minFactor', 'Smallest size ×'],
+  ['tightenBufferAtr', '09:20 buffer below the range (× ATR)'], ['timeStopR', 'Time stop: exit under (R)'], ['trailAtr', 'ATR trail (× ATR)'],
+];
+
+/** The 9:15 gap-entry settings (utils/gapExits.js), inside the trading settings. */
+function GapExitFields({ g, set }) {
+  const field = (k, v) => set({ ...g, [k]: v });
+  return (
+    <>
+      <h4>9:15 gap entry (paper)</h4>
+      <p className="hint">
+        Market entry at 09:15 for the stocks on the Orders page&apos;s gap list. It always enters; the gap (in ATR) sets the size.
+        These are untested starting values: the report by gap type is how to tune them.
+      </p>
+      <div className="trading-grid">
+        {['flat', 'normal', 'large'].map((k) => (
+          <label key={k} className="field-inline">{`${k[0].toUpperCase()}${k.slice(1)} gap below (× ATR)`}<input type="number" step="any" value={g.bands[k]} onChange={(e) => set({ ...g, bands: { ...g.bands, [k]: e.target.value } })} /></label>
+        ))}
+        {['flat', 'normal', 'large', 'extreme'].map((k) => (
+          <label key={k} className="field-inline">{`Size × for ${k} gaps`}<input type="number" step="any" value={g.sizeFactor[k]} onChange={(e) => set({ ...g, sizeFactor: { ...g.sizeFactor, [k]: e.target.value } })} /></label>
+        ))}
+        {GAP_FIELDS.map(([k, label]) => (
+          <label key={k} className="field-inline">{label}<input type="number" step="any" value={g[k]} onChange={(e) => field(k, e.target.value)} /></label>
+        ))}
+        <label className="field-inline">Time stop (IST)<input type="time" value={g.timeStopAt} onChange={(e) => field('timeStopAt', e.target.value)} /></label>
+        <label className="field-inline">Trail the second half
+          <select value={g.trail} onChange={(e) => field('trail', e.target.value)}>
+            <option value="5min">Below the last completed 5-minute bar</option>
+            <option value="atr">ATR distance from the best price</option>
+          </select>
+        </label>
+      </div>
+    </>
+  );
+}
+
 export function TradingSettings() {
   const [s, setS] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -240,6 +279,7 @@ export function TradingSettings() {
         </div>
       ))}
       <p className="hint">Every threshold is a hypothesis to test on recorded days, not a known edge.</p>
+      {s.gapExits && <GapExitFields g={s.gapExits} set={(g) => setS({ ...s, gapExits: g })} />}
       <button type="button" className="btn" onClick={save}>Save trading settings</button>
       {msg && <p className="hint">{msg}</p>}
     </section>

@@ -1,17 +1,23 @@
-import { writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { sameOriginOnly } from './orderRoutes.js';
 import { cleanTradingSettings } from '../src/core/tradingDesk.js';
+import { buildXlsx } from '../src/utils/exportStocks.js';
+import { cleanGapList, gapReportSheets, gapSummary, gapTradeRows } from '../src/utils/gapExits.js';
 
 /**
  * 09:20 trading routes (milestone 2: PAPER only; same-origin requests only).
- *   GET  /api/trading/state?ledger=day|replay      mode, ledger, decisions, settings, blockers
+ *   GET  /api/trading/state?ledger=day|replay      mode, ledger, decisions, settings, blockers, gap entries
  *   GET  /api/trading/decision/:symbol?ledger=     the full decision for one stock
- *   PUT  /api/trading/settings                      risk, strategy and scoring settings
+ *   PUT  /api/trading/settings                      risk, strategy, scoring and gap-entry settings
  *   POST /api/trading/kill        { on, ledger }    kill switch (on: cancel entries, close positions)
  *   POST /api/trading/close-all   { ledger }        square off every paper position now
  *   GET  /api/trading/log/:date                     the day's append-only event log (NDJSON)
+ * 9:15 gap entries (paper):
+ *   GET/PUT /api/trading/gap-list                   { list: [{ symbol, side }], shadowScheduled }
+ *   GET  /api/trading/gap-plan/:symbol?side=        the gap plan for one stock now
+ *   GET  /api/trading/gap-report[?format=xlsx]      closed gap entries from every saved day, by gap type
  */
-export function addTradingRoutes(app, desk, { settingsFile, log }) {
+export function addTradingRoutes(app, desk, { settingsFile, log, gapListFile = null, paperDir = null }) {
   app.use('/api/trading', sameOriginOnly);
   const ledgerOf = (req) => ((req.query.ledger ?? req.body?.ledger) === 'replay' ? 'replay' : 'day');
   app.get('/api/trading/state', (req, res) => res.set('Cache-Control', 'no-store').json(desk.view(ledgerOf(req))));
@@ -35,5 +41,35 @@ export function addTradingRoutes(app, desk, { settingsFile, log }) {
     const text = log.text(req.params.date);
     if (text == null) return res.status(404).json({ error: `No paper-trading log for ${req.params.date}.` });
     res.set({ 'Content-Type': 'application/x-ndjson', 'Content-Disposition': `attachment; filename="paper-${req.params.date}.ndjson"` }).send(text);
+  });
+
+  if (!gapListFile) return;
+  const readGapList = () => { try { return cleanGapList(JSON.parse(readFileSync(gapListFile, 'utf8'))); } catch { return cleanGapList({}); } };
+  app.get('/api/trading/gap-list', (req, res) => res.set('Cache-Control', 'no-store').json(readGapList()));
+  app.put('/api/trading/gap-list', (req, res) => {
+    const saved = cleanGapList(req.body ?? {});
+    writeFileSync(gapListFile, JSON.stringify(saved, null, 2));
+    res.json(saved);
+  });
+  app.get('/api/trading/gap-plan/:symbol', async (req, res) => {
+    const symbol = String(req.params.symbol).trim().toUpperCase();
+    if (!/^[A-Z0-9&_-]{1,25}$/.test(symbol)) return res.status(400).json({ error: 'Enter a valid NSE symbol.' });
+    const plan = await desk.gapPlanFor(symbol, String(req.query.side ?? 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY');
+    if (!plan) return res.status(404).json({ error: 'No gap plan yet: it needs today\'s 09:10 pre-open data for this stock.' });
+    res.set('Cache-Control', 'no-store').json(plan);
+  });
+  app.get('/api/trading/gap-report', (req, res) => {
+    let ledgers = [];
+    try {
+      ledgers = readdirSync(paperDir).filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort()
+        .map((f) => { try { return JSON.parse(readFileSync(`${paperDir}/${f}`, 'utf8')); } catch { return null; } }).filter(Boolean);
+    } catch { /* no paper days yet */ }
+    const rows = gapTradeRows(ledgers);
+    const summary = gapSummary(rows);
+    if (req.query.format === 'xlsx') {
+      const bytes = buildXlsx(gapReportSheets(rows, summary));
+      return res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Content-Disposition': 'attachment; filename="gap-entries.xlsx"' }).send(Buffer.from(bytes));
+    }
+    res.set('Cache-Control', 'no-store').json({ rows, summary });
   });
 }

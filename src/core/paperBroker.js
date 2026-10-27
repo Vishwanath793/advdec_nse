@@ -1,5 +1,5 @@
 import { decisionRow } from '../utils/decision.js';
-import { applyEvent, emptyLedger, markToMarket, orderEvents, rebuildLedger, stepTick } from '../utils/paperLedger.js';
+import { applyEvent, emptyLedger, gapOrderEvents, markToMarket, orderEvents, rebuildLedger, stepTick } from '../utils/paperLedger.js';
 
 /**
  * The paper broker: the ledger (utils/paperLedger.js) plus its files.
@@ -12,7 +12,7 @@ import { applyEvent, emptyLedger, markToMarket, orderEvents, rebuildLedger, step
  * are per day, stock and strategy, and a day is decided only once, so a restart
  * can't place the same order twice.
  */
-export function createPaperBroker({ store = null, log = null, ledger = 'day', risk = () => ({}), onChange = () => {}, now = () => new Date() }) {
+export function createPaperBroker({ store = null, log = null, ledger = 'day', risk = () => ({}), gap = () => ({}), onChange = () => {}, now = () => new Date() }) {
   const persist = Boolean(store && log);
   const lastTicks = new Map();
   let state = null;
@@ -50,7 +50,7 @@ export function createPaperBroker({ store = null, log = null, ledger = 'day', ri
   function flushOpen(at) {
     for (const p of state.positions.filter((x) => x.status === 'OPEN')) {
       const t = lastTicks.get(p.token);
-      if (t) commit(stepTick(state, t, at, risk()));
+      if (t) commit(stepTick(state, t, at, risk(), { gap: gap(state.date) }));
     }
     for (const o of state.orders.filter((x) => x.open)) {
       record([{ type: 'cancel', orderId: o.id, reason: state.closingAll ?? 'cancelled', at: new Date(at).toISOString() }]);
@@ -84,13 +84,20 @@ export function createPaperBroker({ store = null, log = null, ledger = 'day', ri
       record([{ type: 'decided', at, rows: decision.decisions.map(decisionRow), gapReport: decision.gapReport, blockers: decision.blockers, partial: decision.partial }, ...orders]);
       return { orders: orders.length };
     },
-    /** Live (or replayed) ticks after the seal drive the simulated fills and exits. */
+    /** Place the 9:15 gap entries' market orders (once per stock a day). */
+    placeGap(entries, { at, activeFrom, expiresAt }) {
+      if (!state) throw new Error('ledger not loaded');
+      const orders = gapOrderEvents(state, entries, { at, activeFrom, expiresAt });
+      record(orders);
+      return { orders: orders.length };
+    },
+    /** Live (or replayed) ticks drive the simulated fills and exits once there are orders (9:15 gap entries, then the 09:20 decision). */
     onTicks(ticks, receivedAt, { squareOffAt = null } = {}) {
       for (const t of ticks) {
         if (t.index) continue;
         lastTicks.set(t.token, t);
-        if (!state?.decidedAt) continue;
-        commit(stepTick(state, t, t.exchangeTime ?? receivedAt, risk(), { squareOffAt }));
+        if (!state?.orders.length) continue;
+        commit(stepTick(state, t, t.exchangeTime ?? receivedAt, risk(), { squareOffAt, gap: gap(state.date) }));
       }
     },
     kill(on, at = +now()) {

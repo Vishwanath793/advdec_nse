@@ -189,7 +189,7 @@ export default function OpeningScanner() {
           {data.trading.gapReport.map((g) => `${g.symbol} +${f2(g.gapPct, 1)}%: ${g.verdict}${g.decision && g.decision !== 'NO TRADE' ? ` (${g.decision})` : ''}`).join(' · ')}
         </p>
       )}
-      {selected && detail && <OpeningDetail d={detail} decision={decision} onClose={() => setSelected(null)} />}
+      {selected && detail && <OpeningDetail d={detail} decision={decision} gap={gapLevels(data?.trading?.ledgerState, selected)} onClose={() => setSelected(null)} />}
       <p className="hint">
         Decisions are made once at 09:20 and traded on paper only (simulated fills at the bid/ask plus slippage);
         the default is NO TRADE. Figures: gap from Kite&apos;s official open; volume since 09:15 with
@@ -259,14 +259,23 @@ function DecisionDetail({ x }) {
   );
 }
 
-function OpeningDetail({ d, decision, onClose }) {
+/** A stock's 9:15 gap entry in the ledger: the fill and current levels (or the plan before the fill). */
+function gapLevels(st, symbol) {
+  const p = st?.positions?.find((x) => x.symbol === symbol && x.strategy === 'gap915');
+  if (p) return { entry: p.avgEntry, stop: p.stop, target1: p.t1Done ? null : p.target1, target2: p.target2 };
+  const o = st?.orders?.find((x) => x.symbol === symbol && x.strategy === 'gap915' && x.open);
+  return o ? { entry: o.plan?.entry, stop: o.stop, target1: o.target1, target2: o.target2 } : null;
+}
+
+function OpeningDetail({ d, decision, gap, onClose }) {
   return (
     <div className="settings-card opening-detail">
       <div className="section-head">
         <h3 className="report-heading">{d.symbol} <span className="hint">{d.sector}</span></h3>
         <button type="button" className="btn ghost" onClick={onClose}>Close</button>
       </div>
-      <OpeningChart d={d} plan={decision?.plan ?? null} />
+      <OpeningChart d={d} plan={decision?.plan ?? null} gap={gap} />
+      {gap && <p className="hint">9:15 gap entry (paper): fill {gap.entry ?? '—'}, stop {gap.stop ?? '—'}, T1 {gap.target1 ?? 'done'}, T2 {gap.target2 ?? 'trail'}.</p>}
       {decision ? <DecisionDetail x={decision} /> : <p className="hint">No 09:20 decision for this stock yet.</p>}
       <div className="opening-detail-grid">
         <div>

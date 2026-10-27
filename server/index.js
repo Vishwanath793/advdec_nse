@@ -34,7 +34,8 @@ import { createEventLog } from './eventLog.js';
 import { addTradingRoutes } from './tradingRoutes.js';
 import { createTradingDesk } from '../src/core/tradingDesk.js';
 import { addOrderRoutes, sameOriginOnly } from './orderRoutes.js';
-import { indiaDate } from '../src/core/calendar.js';
+import { indiaDate, istInstant } from '../src/core/calendar.js';
+import { gapEntriesFor } from '../src/utils/gapExits.js';
 import { parseCSV, rowsToObjects } from '../src/utils/csv.js';
 import { fsStore } from './fsStore.js';
 import { readCalendar } from './tv/calendar.js';
@@ -321,10 +322,34 @@ const broadcastOpening = () => {
   for (const send of openingSubscribers) { try { send(payload); } catch { openingSubscribers.delete(send); } }
 };
 const paperLog = createEventLog(`${dataDir}/paper`);
+// 9:15 gap entries (paper): the saved list plus, when on, read-only shadows of scheduled 09:15 market orders.
+const gapEntries = async (date) => gapEntriesFor(date, readJsonFile('gap915-list.json'), await orderScheduler.list().catch(() => []), {
+  from: +istInstant(date, '09:15'), to: +istInstant(date, '09:16'),
+});
+let gapSymbols = []; // refreshed with the candidates, so the collector subscribes to them
+const preopenStocks = async () => {
+  const snapshot = preopen.status().snapshot;
+  if (!snapshot) return null;
+  const context = await marketContext.get().then(withPreopenBaseline).catch(() => null);
+  const { stocks } = analyze(snapshot.rows, currentMasterRows(), await priceBands.get().catch(() => null), {
+    convictionFactors: readJsonFile('export-settings.json')?.factorSettings ?? null, context,
+  });
+  return { stocks, snapshotDate: snapshotDate(snapshot, calendar) };
+};
 const tradingDesk = createTradingDesk({
   store: fsStore(dataDir), log: paperLog, calendar,
   settings: () => readJsonFile('trading-settings.json') ?? {},
   onUpdate: () => broadcastOpening(),
+  gapList: gapEntries,
+  // A stock outside today's opening universe: its 09:10 pre-open row, with the ATR estimated.
+  gapFallback: async (symbol, side) => {
+    const s = (await preopenStocks())?.stocks.find((x) => x.symbol === symbol);
+    return s ? {
+      symbol, side, prevClose: s.prevClose, open: s.finalPrice, atr: null, upperCircuit: s.upperCircuit ?? null, lowerCircuit: s.lowerCircuit ?? null,
+      prevHigh: s.prevHigh ?? null, prevLow: s.prevLow ?? null,
+      sources: { prevClose: 'NSE pre-open (09:10 import)', open: 'NSE pre-open final price (09:10 import)', atr: 'missing until the opening universe loads: estimated', tick: 'default ₹0.05', circuit: 'NSE price bands' },
+    } : null;
+  },
 });
 const openingCollector = createOpeningCollector({
   store: fsStore(dataDir),
@@ -333,16 +358,15 @@ const openingCollector = createOpeningCollector({
   history: createHistoryService({ store: fsStore(dataDir), kite, calendar }),
   calendar,
   tickLog,
-  settings: () => readJsonFile('opening-settings.json') ?? {},
+  // The 9:15 gap-entry stocks are always watched, whatever their gap or conviction.
+  settings: () => {
+    const s = readJsonFile('opening-settings.json') ?? {};
+    return { ...s, watchlist: [...(s.watchlist ?? []), ...gapSymbols] };
+  },
   // Candidates: today's 09:10 pre-open analysed as in the browser (factors from the browser's last choice).
-  getCandidates: async () => {
-    const snapshot = preopen.status().snapshot;
-    if (!snapshot) return null;
-    const context = await marketContext.get().then(withPreopenBaseline).catch(() => null);
-    const { stocks } = analyze(snapshot.rows, currentMasterRows(), await priceBands.get().catch(() => null), {
-      convictionFactors: readJsonFile('export-settings.json')?.factorSettings ?? null, context,
-    });
-    return { stocks, snapshotDate: snapshotDate(snapshot, calendar) };
+  getCandidates: async (date) => {
+    gapSymbols = (await gapEntries(date).catch(() => [])).map((e) => e.symbol);
+    return preopenStocks();
   },
   trading: tradingDesk,
   onUpdate: (payload) => {
@@ -364,7 +388,7 @@ app.put('/api/opening/settings', (req, res) => {
   res.json(saved);
 });
 // Each trading morning: arm the day (and again just before connecting, in case the import was late).
-addTradingRoutes(app, tradingDesk, { settingsFile: `${dataDir}/trading-settings.json`, log: paperLog });
+addTradingRoutes(app, tradingDesk, { settingsFile: `${dataDir}/trading-settings.json`, log: paperLog, gapListFile: `${dataDir}/gap915-list.json`, paperDir: `${dataDir}/paper` });
 const wakeOpening = () => openingCollector.wake()
   .then(() => tradingDesk.wake({ sealedFor: openingCollector.sealedFor }))
   .catch((error) => console.error(`Opening window: ${error.message}`));

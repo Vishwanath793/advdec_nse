@@ -2,13 +2,14 @@
  * 09:15–09:20 candidate chart (plain SVG, no chart library): the five
  * one-minute candles (approximate: built from sampled ticks), the opening-range
  * high/low, Kite's VWAP at 09:20, volume bars, and the plan's entry, stop and targets.
+ * `gap`: a 9:15 gap entry for the stock ({ entry, stop, target1, target2 }): its fill and current levels.
  */
 const W = 560;
 const H = 280;
 const PAD = { l: 8, r: 92, t: 10, b: 8 };
 const VOL_H = 54;
 
-export default function OpeningChart({ d, plan }) {
+export default function OpeningChart({ d, plan, gap = null }) {
   const candles = (d.candles ?? []).map((c, i) => (c ? { ...c, i } : null)).filter(Boolean);
   if (!candles.length) return <p className="hint">No candles yet.</p>;
   const lines = [
@@ -20,6 +21,12 @@ export default function OpeningChart({ d, plan }) {
       { y: plan.stop, label: 'Stop', cls: 'line-stop' },
       { y: plan.target1, label: 'T1', cls: 'line-target' },
       { y: plan.target2, label: 'T2', cls: 'line-target' },
+    ] : []),
+    ...(gap ? [
+      { y: gap.entry, label: '9:15 fill', cls: 'line-entry' },
+      { y: gap.stop, label: '9:15 stop', cls: 'line-stop' },
+      { y: gap.target1, label: '9:15 T1', cls: 'line-target' },
+      { y: gap.target2, label: '9:15 T2', cls: 'line-target' },
     ] : []),
   ].filter((x) => x && Number.isFinite(x.y));
   const prices = [...candles.flatMap((c) => [c.h, c.l]), ...lines.map((x) => x.y)];

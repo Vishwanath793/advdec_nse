@@ -29,6 +29,16 @@ import { istInstant } from '../core/calendar.js';
 
 export const SIMULATED_DATE = '2026-10-19'; // a Monday in the 2026 NSE calendar
 
+/** 9:15 gap entries used in the simulated replay when none of the saved gap list is in it (one of each gap type). */
+export const SIMULATED_GAP_LIST = [
+  { symbol: 'MOMO', side: 'BUY', source: 'demo' }, // normal gap (0.4 ATR)
+  { symbol: 'ORBUP', side: 'BUY', source: 'demo' }, // normal gap (0.7 ATR)
+  { symbol: 'ORBDN', side: 'SELL', source: 'demo' }, // large gap down (0.8 ATR), short
+  { symbol: 'DEADCAT', side: 'BUY', source: 'demo' }, // extreme gap that fades
+  { symbol: 'GAPPULL', side: 'BUY', source: 'demo' }, // extreme gap that pulls back and recovers
+  { symbol: 'LOCKED', side: 'BUY', source: 'demo' }, // locked at the upper circuit: no sellers, never fills
+];
+
 function rng(seed) {
   let s = seed >>> 0;
   return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32);

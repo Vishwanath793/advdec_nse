@@ -100,6 +100,12 @@ export function createWebApi() {
       kill: (on, ledger = 'day') => json(post('/api/trading/kill', { on, ledger })),
       closeAll: (ledger = 'day') => json(post('/api/trading/close-all', { ledger })),
       logUrl: (date) => `/api/trading/log/${date}`,
+      /** 9:15 gap entries (paper): the list, one stock's plan now, and the report by gap type. */
+      gapList: () => json(fetch('/api/trading/gap-list')),
+      saveGapList: (body) => json(post('/api/trading/gap-list', body, 'PUT')),
+      gapPlan: (symbol, side = 'BUY') => json(fetch(`/api/trading/gap-plan/${encodeURIComponent(symbol)}?side=${side}`)),
+      gapReport: () => json(fetch('/api/trading/gap-report')),
+      gapReportXlsxUrl: () => '/api/trading/gap-report?format=xlsx',
     },
     /** Live prices from NSE (fallback when Kite has no market data), in Kite's quote shape. */
     live: { quote: (instruments) => json(post('/api/nse/live', { instruments })) },
