@@ -74,12 +74,16 @@ report is on the Orders page.
 **Tests / checks:** npm test (299 pass, 19 new in `server/gapExits.test.js`), npm run build, npx cap sync android,
 `node --check server/index.js`.
 
+**Browser check (same day, after restarting the :3002 backend):**
+- No scheduled order was pending; the restart was at 17:26 IST.
+- The simulated replay gave the same 5 gap trades as the tests (net ₹189.25 after ₹67.02 charges; LOCKED never
+  filled).
+- The Orders card, "Check a stock" (INFY from today's pre-open), the empty report with its Excel link, the
+  Settings section and the scheduled-order quantity hint all render. There were no console errors.
+- The gap list was not saved (still empty) and no order was scheduled.
+
 **Not verified:**
 - Nothing has run in market hours.
-- **No browser check and no backend run.** A backend was already running on :3002 (another session), and a
-  second backend would run a second order scheduler on the same `.data`.
-- **The running :3002 backend has the old code.** It needs a restart before the gap list can be saved or any gap
-  entry is placed.
 - The Kite tick fields used at 09:20 (day low/high, average price) are as documented for full mode; they haven't
   been checked live.
 

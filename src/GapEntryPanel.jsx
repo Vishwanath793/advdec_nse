@@ -176,7 +176,7 @@ export function GapEntryPanel() {
               </tbody>
             </table>
           </div>
-          {totals && <p className="hint">Gap entries today: {totals.trades} trades, W/L {totals.wins}/{totals.losses}, realised <span className={tone(totals.realised)}>{rs(totals.realised)}</span> after {rs(totals.charges)} charges. They don&apos;t use the 09:20 slots; their P&amp;L counts towards the daily loss limit.</p>}
+          {totals && <p className="hint">Gap entries {ledger === 'day' ? 'today' : 'in this replay'}: {totals.trades} trades, W/L {totals.wins}/{totals.losses}, realised <span className={tone(totals.realised)}>{rs(totals.realised)}</span> after {rs(totals.charges)} charges. They don&apos;t use the 09:20 slots; their P&amp;L counts towards the daily loss limit.</p>}
         </>
       )}
 
