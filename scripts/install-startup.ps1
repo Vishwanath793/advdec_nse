@@ -1,3 +1,5 @@
+# -Port: the backend's port for this Windows user (default: PORT from .env, else 3001).
+param([ValidateRange(1, 65535)][int]$Port = 0)
 $ErrorActionPreference = 'Stop'
 $projectDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $nodeExe = (Get-Command node -ErrorAction Stop).Source
@@ -7,7 +9,10 @@ $taskName = 'AdvanceDecline-Backend'
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 New-Item -ItemType Directory -Path (Join-Path $projectDir '.data') -Force | Out-Null
 $escapePs = { param($value) "'" + $value.Replace("'", "''") + "'" }
-$commandText = '& ' + (& $escapePs $nodeExe) + ' ' + (& $escapePs $serverFile) + ' >> ' + (& $escapePs $logFile) + ' 2>&1'
+# An environment PORT wins over .env (dotenv does not override it).
+$portText = if ($Port) { '$env:PORT=''' + $Port + '''; ' } else { '' }
+# Windows PowerShell 5.1's >> writes UTF-16 unless Out-File's default encoding is set; the log is UTF-8.
+$commandText = '$PSDefaultParameterValues[''Out-File:Encoding'']=''utf8''; ' + $portText + '& ' + (& $escapePs $nodeExe) + ' ' + (& $escapePs $serverFile) + ' >> ' + (& $escapePs $logFile) + ' 2>&1'
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -Command "' + $commandText + '"') -WorkingDirectory $projectDir
 $triggers = @(New-ScheduledTaskTrigger -AtLogOn -User $identity)
 # Start the backend before research time if it was stopped during the day.

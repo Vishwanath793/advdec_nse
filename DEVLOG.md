@@ -40,6 +40,21 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-28: Backend starts at Windows sign-in on port 3002 for DELL (Claude Code for vinayakb374, android-app, local commit)
+**What changed:** backends started as Claude desktop previews (`preview_start`) are stopped by the app after a while
+("stopped by the app" at 11:20 and 18:03 IST today), which took the app down. For the DELL Windows account the
+backend now runs as the scheduled task `AdvanceDecline-Backend` (at sign-in, and daily at 18:55 IST if stopped),
+port 3002, logging to `.data/backend.log`. `scripts/install-startup.ps1` gained `-Port` (sets `PORT` for the task;
+dotenv doesn't override it) and writes the log as UTF-8 (Windows PowerShell 5.1's `>>` wrote UTF-16). Without
+`-Port` it behaves as before.
+**Files:** scripts/install-startup.ps1, README.md.
+**Tests / checks:** task registered and running (one backend, node on 127.0.0.1:3002); the app loads at
+http://localhost:3002; the log's new lines are UTF-8. No scheduled orders were pending when the backend was stopped.
+**Not verified:** a real sign-in after a reboot. The log has a few UTF-16 lines from 19:13 IST (before the fix).
+**Next / open questions:** **Claude Code sessions: don't run the backend with `preview_start` on this PC any more**;
+restart it with `Stop-ScheduledTask` / `Start-ScheduledTask -TaskName AdvanceDecline-Backend` (check that node
+exited). Today's 19:00 TV research failed: Playwright's Chromium is missing (`npm run tv:browser` installs it).
+
 ### 2026-10-28: AI Analyst: offline fallback when the model can't answer (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** "Could not reach the AI Analyst on the backend: Failed to fetch" was the :3002 backend not running
 (the desktop app had stopped its preview at 11:20 IST); it was started again. Then every question failed: the
