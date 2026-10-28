@@ -30,7 +30,7 @@ const NOW = new Date('2026-10-26T10:00:00Z'); // Monday 15:30 IST
 const glossaryDoc = { docId: 'glossary:factors', sourceType: 'glossary', sourceRef: 'generated', title: 'Factor glossary', kind: 'methodology', availableAt: '2026-10-01T00:00:00.000Z', version: 'glossary-v1', text: buildGlossary() };
 const LIVE_FP = { contextFp: contextFingerprint(contextFor('2026-10-22'), normalizeProfile({})), inputsFp: inputsFingerprint({ masterRows: MASTER, priceBands: null }) };
 
-async function setup({ provider = createMockProvider(), config = {}, docs = FIXTURE_DOCS, snapshots = fixtureSnapshots(), embedder } = {}) {
+async function setup({ provider = createMockProvider(), config = {}, docs = FIXTURE_DOCS, snapshots = fixtureSnapshots(), embedder, offline } = {}) {
   const store = memoryStore();
   const cfg = { ...aiConfig({ AI_PROVIDER: 'mock' }), quietWindow: null, ...config };
   const indexStore = createIndexStore(store);
@@ -39,7 +39,7 @@ async function setup({ provider = createMockProvider(), config = {}, docs = FIXT
   const retriever = createRetriever({ indexStore, embedder: emb });
   const usage = createUsageLedger({ store, config: cfg, now: () => NOW });
   const data = createAnalystData({ snapshots, calendar, now: () => NOW });
-  const analyst = createAnalyst({ config: cfg, provider, data, retriever, usage, calendar, now: () => NOW });
+  const analyst = createAnalyst({ config: cfg, provider, data, retriever, usage, calendar, now: () => NOW, ...(offline === undefined ? {} : { offline }) });
   const live = (await snapshots.list()).find((s) => s.source === 'analyzer');
   const recorded = (date) => snapshots.list().then((l) => l.find((s) => s.source === 'recorded' && s.date === date));
   return { store, indexStore, retriever, usage, data, analyst, snapshots, live, recorded, cfg };
@@ -443,10 +443,11 @@ test('missing credentials: AI not configured, the rest unaffected', async () => 
   await assert.rejects(analyst.ask(body(live)), (e) => e.code === 'not_configured');
 });
 
-test('provider timeout and rate limits reach the browser as errors; cancellation stops the question', async () => {
-  const failing = (error) => ({ name: 'f', model: 'f', embedder: createMockEmbedder(), async respond() { throw error; } });
+const failing = (error) => ({ name: 'f', model: 'f', embedder: createMockEmbedder(), async respond() { throw error; } });
+
+test('provider timeout and rate limits reach the browser as errors without the offline fallback; cancellation stops the question', async () => {
   for (const [err, code] of [[mapProviderError(new OpenAI.APIConnectionTimeoutError()), 'timeout'], [mapProviderError(Object.assign(new Error('slow down'), { status: 429 })), 'rate_limited']]) {
-    const { analyst, live } = await setup({ provider: failing(err) });
+    const { analyst, live } = await setup({ provider: failing(err), offline: null });
     await assert.rejects(analyst.ask(body(live)), (e) => e.code === code);
   }
   const hanging = { name: 'h', model: 'h', embedder: createMockEmbedder(), respond: ({ signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(mapProviderError(new OpenAI.APIUserAbortError(), signal)))) };
@@ -458,6 +459,34 @@ test('provider timeout and rate limits reach the browser as errors; cancellation
   await assert.rejects(pending, (e) => e.code === 'cancelled');
   clearTimeout(keepAlive);
   assert.equal(analyst.active(), 0);
+});
+
+test('when the model fails (no quota, bad key, unreachable), the offline analyst answers from the same data, labelled and not cached', async () => {
+  const quota = mapProviderError(Object.assign(new Error('You exceeded your current quota, check your plan and billing details.'), { status: 429 }));
+  for (const err of [quota, mapProviderError(Object.assign(new Error('bad key'), { status: 401 })), mapProviderError(new Error('ECONNREFUSED'))]) {
+    const { analyst, live, usage } = await setup({ provider: failing(err) });
+    const r = await analyst.ask(body(live));
+    assert.equal(r.provider, 'mock');
+    assert.equal(r.fallback.code, err.code);
+    assert.equal(r.fallback.model, 'f');
+    assert.match(r.fallback.reason, err.code === 'rate_limited' ? /no quota/ : /./);
+    assert.equal(r.insufficient, false);
+    assert.ok(r.sources.some((x) => x.ref === 'getStockAnalysis' && x.symbol === 'ALPHA'));
+    assert.equal(r.usage.calls, 0); // offline answers cost nothing
+    assert.equal((await usage.summary()).calls, 0);
+    assert.equal((await analyst.ask(body(live))).cached, false);
+  }
+  // The model failing after a function call: the offline analyst still answers.
+  let n = 0;
+  const half = { name: 'h', model: 'h', embedder: createMockEmbedder(), async respond() {
+    if (n++) throw quota;
+    return { toolCalls: [{ callId: 'c1', name: 'getAnalysisSnapshot', arguments: '{}' }], continuation: [], text: null, usage: { input: 5, output: 5 } };
+  } };
+  const { analyst, live } = await setup({ provider: half });
+  const r = await analyst.ask(body(live, { question: 'Summarize the selected day\'s breadth and sector activity.', symbols: [] }));
+  assert.equal(r.fallback.code, 'rate_limited');
+  assert.equal(r.usage.calls, 1);
+  assert.match(r.answer, /advanced/);
 });
 
 test('daily budget and concurrency limits are enforced', async () => {

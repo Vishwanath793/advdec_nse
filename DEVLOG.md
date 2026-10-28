@@ -40,6 +40,24 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-28: AI Analyst: offline fallback when the model can't answer (Claude Code for vinayakb374, android-app, local commit)
+**What changed:** "Could not reach the AI Analyst on the backend: Failed to fetch" was the :3002 backend not running
+(the desktop app had stopped its preview at 11:20 IST); it was started again. Then every question failed: the
+OpenAI account behind `AI_API_KEY` has **no quota left (HTTP 429)**. Now, when the model call fails with no quota, a
+rate limit, a rejected key, an unknown model, an unreachable provider or a timeout, the analyst answers with the
+offline template analyst (the mock provider) from the same read-only data functions and retrieved passages. The
+answer says so in a warning, costs no tokens, isn't counted in the daily usage and isn't cached, so the next question
+tries the model again. Cancellation and the daily budget still stop a question. The page's "could not reach" error
+now says the backend is probably not running and has a *Try again* button.
+**Files:** server/ai/analyst.js, src/AiAnalystPage.jsx, server/aiAnalyst.test.js.
+**Tests / checks:** npm test (322 pass), npm run build, npx cap sync android. Browser on :3002: "Summarize the
+selected day's breadth…" → 248 advanced / 408 declined with sources; "conviction above 70 and gap between 1 and 3" →
+13 matches. Both show the 429 reason and "Offline templates (no AI)".
+**Not verified:** a real model answer (no quota). Embeddings for the index can't be built until the quota is restored
+(document search stays keyword-only).
+**Next / open questions:** add credit to the OpenAI account, or set `AI_PROVIDER=mock` to skip the failing call.
+`AI_MODEL` is unset, so the default `gpt-6.1-sol` is used; check that the account can use it.
+
 ### 2026-10-28: Live gap exits: unique tags, not-armed warnings, Kite ATR for late opted-in stocks (Claude Code for vinayakb374, android-app, local commit)
 **Why:** The 09:15 SELL 500 SAIL with live gap exits (S12, scheduled at 09:12) was not sent. The switch was on, but
 today wasn't armed. Three problems showed:

@@ -5,7 +5,7 @@ import { aiError, redactSecrets } from './errors.js';
 import { configProblem } from './config.js';
 import { runTool, toolDefinitions, TOOL_NAMES } from './tools.js';
 import { createEvidenceRegistry, extractNumbers, MAX_EVIDENCE_CHARS, policyNotes, stripConfidence, validateAnswer } from './evidence.js';
-import { INSUFFICIENT } from './providers/mock.js';
+import { createMockProvider, INSUFFICIENT } from './providers/mock.js';
 import { estimateTokens } from './rag/text.js';
 
 /**
@@ -94,7 +94,10 @@ export function validateRequest(body) {
   };
 }
 
-export function createAnalyst({ config, provider, data, retriever, usage, calendar, now = () => new Date() }) {
+/** Provider failures after which the offline (template) analyst answers instead. */
+const FALLBACK_CODES = new Set(['rate_limited', 'auth', 'provider', 'timeout']);
+
+export function createAnalyst({ config, provider, data, retriever, usage, calendar, now = () => new Date(), offline = provider?.name === 'mock' ? null : createMockProvider() }) {
   let active = 0;
   const cache = new Map();
 
@@ -187,19 +190,35 @@ export function createAnalyst({ config, provider, data, retriever, usage, calend
 
     let final = null;
     let calls = 0;
+    let gen = provider;
+    let fallback = null; // { code, reason, round } once the offline analyst took over
     for (let round = 1; round <= MAX_ROUNDS && !final; round++) {
       check();
-      await usage.check();
+      if (!fallback) await usage.check();
       const tools = round < MAX_ROUNDS && calls < MAX_CALLS ? toolDefinitions() : [];
-      const res = await provider.respond({
-        instructions: INSTRUCTIONS, input, tools, schema: ANSWER_SCHEMA, maxOutputTokens: config.maxOutputTokens, signal, round,
+      const request = () => ({
+        instructions: INSTRUCTIONS, input, tools, schema: ANSWER_SCHEMA, maxOutputTokens: config.maxOutputTokens, signal,
+        round: fallback ? round - fallback.round + 1 : round,
         // For the offline mock only (the real provider reads `input`).
         question: req.question, context: { symbols: req.symbols, knownSymbols: [...known], date: session.snap.date }, evidence: registry.supplied().map((id) => registry.get(id)),
-      }).catch((error) => { throw error.code ? error : aiError(outerSignal?.aborted ? 'cancelled' : 'provider', redactSecrets(error.message)); });
-      spent.calls++;
-      spent.input += res.usage.input;
-      spent.output += res.usage.output;
-      await usage.add('generate', { input: res.usage.input, output: res.usage.output });
+      });
+      let res;
+      try {
+        res = await gen.respond(request());
+      } catch (error) {
+        const e = error.code ? error : aiError(outerSignal?.aborted ? 'cancelled' : 'provider', redactSecrets(error.message));
+        if (!offline || fallback || !FALLBACK_CODES.has(e.code) || outerSignal?.aborted) throw e;
+        // The model can't answer (no quota, bad key, unknown model, unreachable): answer from the same data with templates.
+        fallback = { code: e.code, reason: e.message, round };
+        gen = offline;
+        res = await gen.respond(request());
+      }
+      if (!fallback) {
+        spent.calls++;
+        spent.input += res.usage.input;
+        spent.output += res.usage.output;
+        await usage.add('generate', { input: res.usage.input, output: res.usage.output });
+      }
       if (!res.toolCalls.length) { final = res.text; break; }
       input.push(...res.continuation);
       for (const call of res.toolCalls) {
@@ -262,13 +281,15 @@ export function createAnalyst({ config, provider, data, retriever, usage, calend
       retrieval,
       checks: { ...checked.checks, refusedCalls: refused, toolErrors, policyNotes: notes, parseError, ungrounded: !grounded },
       usage: { ...spent, estimatedPromptTokens: estimateTokens(evidenceText()) },
-      provider: provider.name,
-      model: provider.model,
+      provider: gen.name,
+      model: gen.model,
+      fallback: fallback ? { code: fallback.code, reason: fallback.reason, provider: provider.name, model: provider.model } : null,
       promptVersion: PROMPT_VERSION,
       at: now().toISOString(),
       cached: false,
     };
-    if (req.mode === 'as-known') {
+    // An offline answer is not cached, so the next question tries the model again.
+    if (req.mode === 'as-known' && !fallback) {
       cache.set(cacheKey, response);
       if (cache.size > 50) cache.delete(cache.keys().next().value);
     }

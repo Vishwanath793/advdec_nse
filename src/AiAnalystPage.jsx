@@ -127,6 +127,12 @@ function Answer({ r }) {
         <span className="badge unchanged">{r.mode === 'as-known' ? 'As known' : 'Retrospective'}</span>
         <span className="hint">Data date {r.dataDate} · cutoff {fmtTime(r.cutoff)} · {r.snapshot?.source === 'analyzer' ? 'Analyzer view' : 'recorded morning'}{r.cached ? ' · from cache' : ''}</span>
       </div>
+      {r.fallback && (
+        <div className="alert warn ai-small">
+          The AI model ({r.fallback.model}) could not answer: {r.fallback.reason} This is the offline answer instead: fixed templates
+          built from the same read-only data, without a language model, so it covers only basic questions.
+        </div>
+      )}
       <p className={`ai-text ${r.insufficient ? 'insufficient' : ''}`}><CitedText text={r.answer} onCite={cite} /></p>
       {warnings.map((w) => <div key={w} className="alert warn ai-small">{w}</div>)}
       <ClaimList title="Supporting evidence" items={r.supporting} onCite={cite} className="support" />
@@ -148,7 +154,7 @@ function Answer({ r }) {
         </div>
       )}
       {r.consulted?.length > 0 && <p className="hint">Also given to the model, not cited: {r.consulted.map((s) => `${s.id} ${s.title}`).join('; ')}.</p>}
-      <p className="hint">{r.provider === 'mock' ? 'Mock provider (offline templates, no AI)' : r.model} · {r.usage?.calls ?? 0} provider call(s), {((r.usage?.input ?? 0) + (r.usage?.output ?? 0)).toLocaleString('en-IN')} tokens</p>
+      <p className="hint">{r.provider === 'mock' ? (r.fallback ? 'Offline templates (no AI)' : 'Mock provider (offline templates, no AI)') : r.model} · {r.usage?.calls ?? 0} provider call(s), {((r.usage?.input ?? 0) + (r.usage?.output ?? 0)).toLocaleString('en-IN')} tokens</p>
     </div>
   );
 }
@@ -298,7 +304,13 @@ export default function AiAnalystPage({ analyzer, analyzerSymbols = [], profile,
         <span className="hint">Explains recorded data with sources. It cannot place, change or cancel orders or change settings, and its scores are rankings, not win probabilities.</span>
       </div>
 
-      {statusError && <div className="alert error">Could not reach the AI Analyst on the backend: {statusError}</div>}
+      {statusError && (
+        <div className="alert error">
+          Could not reach the AI Analyst on the backend: {statusError}
+          {/fetch|network/i.test(statusError) ? '. The backend is probably not running: start it (npm run server), then try again.' : ''}
+          {' '}<button type="button" className="btn" onClick={refreshStatus}>Try again</button>
+        </div>
+      )}
       {problem && (
         <div className="alert warn">
           <strong>AI not configured.</strong> {problem}
