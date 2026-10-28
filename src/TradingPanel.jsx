@@ -217,6 +217,11 @@ export function StrategyExtras({ cfg, set }) {
           </select>
         </label>
       )}
+      {'requireVolumeMatch' in cfg && (
+        <label className="field-inline" title="The brief's release prerequisite: live tick volume must match Kite's minute bars (Report card → Research → volume check)">
+          <input type="checkbox" checked={cfg.requireVolumeMatch} onChange={(e) => set('requireVolumeMatch', e.target.checked)} /> Paper only after the volume check matched
+        </label>
+      )}
       {'entryDeadline' in cfg && (
         <label className="field-inline">No entry from (IST)<input type="time" value={cfg.entryDeadline} onChange={(e) => set('entryDeadline', e.target.value)} /></label>
       )}

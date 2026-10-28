@@ -81,6 +81,7 @@ export function createTradingDesk({
   store, log, calendar, settings = () => DEFAULT_TRADING_SETTINGS, now = () => new Date(),
   setTimer = setTimeout, clearTimer = clearTimeout, onUpdate = () => {},
   gapList = async () => [], gapFallback = async () => null,
+  strategyContext = async () => ({}), // runtime facts merged into strategy settings, e.g. { breakHold: { volumeMatched } }
 }) {
   const cfg = () => cleanTradingSettings(settings());
   const changed = () => { try { onUpdate(); } catch { /* ignore */ } };
@@ -141,7 +142,10 @@ export function createTradingDesk({
   async function decide(sealed, ledger, { partial = false } = {}) {
     const broker = brokers[ledger];
     const s = cfg();
-    const decision = decideOpening(sealed, { ...s, day: ledgerDay(broker.state), partial: partial || Boolean(sealed.partialFrom), mode: s.mode });
+    // Runtime facts (not settings), e.g. whether strategy D's volume check has matched.
+    const ctx = (await Promise.resolve(strategyContext()).catch(() => ({}))) ?? {};
+    const strategies = Object.fromEntries(Object.entries(s.strategies).map(([k, v]) => [k, { ...v, ...(ctx[k] ?? {}) }]));
+    const decision = decideOpening(sealed, { ...s, strategies, day: ledgerDay(broker.state), partial: partial || Boolean(sealed.partialFrom), mode: s.mode });
     decisions[ledger] = decision;
     if (ledger === 'day') await store.write(`paper/${sealed.date}-decision.json`, decision);
     const sealedAt = sealed.sealedAt ?? new Date(at(sealed.date, '09:20')).toISOString();

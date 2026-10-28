@@ -77,4 +77,18 @@ export function replaySheets(r) {
   ];
 }
 
-export const researchWorkbook = (kind, result) => buildXlsx(kind === 'replay' ? replaySheets(result) : backtestSheets(result));
+/** Sheets for strategy D's volume check (utils/volumeReconcile.js). */
+export function reconcileSheets(r) {
+  return [
+    {
+      name: 'Verdict', header: false, widths: [28, 90],
+      rows: [['Strategy D volume check: recorded tick volumes vs Kite 1-minute bars'], ['Run', istStamp(new Date(r.ranAt))], ['Mornings', r.dates.join(', ')],
+        ['Verdict', r.verdict.text], ...(r.hint ? [['Hint', r.hint]] : []), ['Rule', `±${r.rule.tolerance * 100}%, ${r.rule.minStockDays}+ stock-days, ${r.rule.minMornings}+ mornings`]],
+    },
+    { name: 'By minute', rows: [['Minute', 'Comparisons', 'Median ticks ÷ Kite', 'Share within tolerance'], ...r.minutes.map((m) => [m.minute, m.samples, m.medianRatio, m.shareWithin])] },
+    { name: 'Rows', rows: [['Date', 'Symbol', 'Minute', 'Ticks', 'Ticks (lower bound)', 'Kite bar', 'Ratio', 'Volume start'], ...r.rows.map((x) => [x.date, x.symbol, x.minute, x.ticks, x.ticksLow, x.kite, x.ratio, x.baseline])] },
+  ];
+}
+
+const SHEETS = { replay: replaySheets, reconcile: reconcileSheets, backtest: backtestSheets };
+export const researchWorkbook = (kind, result) => buildXlsx((SHEETS[kind] ?? backtestSheets)(result));

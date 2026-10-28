@@ -9,7 +9,7 @@ import { createOpeningWindow } from '../src/utils/openingWindow.js';
 // Strategy D, part 2 of the brief: pattern states, quality gates, ranking, revalidation; the brief's worked examples.
 
 const DATE = '2026-10-19';
-const PAPER = { ...DEFAULT_STRATEGY_SETTINGS.breakHold, mode: 'paper' };
+const PAPER = { ...DEFAULT_STRATEGY_SETTINGS.breakHold, mode: 'paper', volumeMatched: true }; // as if the volume check had matched
 const cdl = (o, h, l, c, volume) => ({ o, h, l, c, volume, approximate: true });
 const goodQuality = {
   quality: { ticks: 300, stale: false, lastTickAgeSec: 1, lastTradeAgeSec: 1, resets: 0, volumeBaseline: 'NSE pre-open quantity' },

@@ -61,6 +61,8 @@ async function serve({ session = { apiKey: 'k', accessToken: 't' }, now = () => 
         a.onProgress({ stage: 'Kite 1-minute candles (stocks)', done: 1, total: 2 });
         return { days: DAYS.map(simulatedCandleDay), skipped: { noToken: [] }, requests: 3 };
       }),
+      // Kite minute bars for the volume check: 1,000 shares a minute.
+      minuteCandles: async (symbol, token, days) => { calls.push({ symbol, token }); return Object.fromEntries(days.map((d) => [d, ['09:15', '09:16', '09:17', '09:18', '09:19'].map((m) => [+at(m, d), 1, 1, 1, 1, 1000])])); },
     },
   });
   const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
@@ -181,4 +183,21 @@ test('the backtest workbook has every section, with the BACKTEST label and the l
   assert.ok(sheets[0].rows.some((r) => /Minute candles/.test(r[0] ?? '')));
   assert.equal(sheets[1].rows[1][6], 'no losses'); // profit factor ∞
   assert.deepEqual(sheets.at(-1).rows[1], ['risk.capital', 100000]);
+});
+
+test('strategy D volume check: recorded tick volumes vs Kite minute bars, saved with a verdict and exported', async () => {
+  const s = await serve();
+  try {
+    assert.equal((await s.post('/api/research/reconcile', {})).status, 200);
+    const done = await s.waitDone();
+    assert.equal(done.job.state, 'done', done.job.error);
+    assert.equal(done.last.reconcile.verdict.matched, false); // one recorded morning is not enough
+    const r = await (await s.get('/api/research/result/reconcile')).json();
+    assert.deepEqual(r.dates, [SIMULATED_DATE]);
+    assert.ok(r.rows.length > 0 && r.rows.every((x) => x.kite === 1000));
+    assert.match(r.verdict.text, /recorded morning/);
+    assert.equal((await s.get('/api/research/export/reconcile.xlsx')).status, 200);
+  } finally { s.close(); }
+  const noKite = await serve({ session: null });
+  try { assert.equal((await noKite.post('/api/research/reconcile', {})).status, 409); } finally { noKite.close(); }
 });

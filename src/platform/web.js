@@ -144,6 +144,7 @@ export function createWebApi() {
       status: () => json(fetch('/api/research/status')),
       backtest: (body) => json(post('/api/research/backtest', body)),
       replay: (body) => json(post('/api/research/replay', body)),
+      reconcile: () => json(post('/api/research/reconcile', {})),
       cancel: () => json(post('/api/research/cancel', {})),
       result: (kind) => json(fetch(`/api/research/result/${kind}`)),
       exportUrl: (kind) => `/api/research/export/${kind}.xlsx`,

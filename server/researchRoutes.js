@@ -5,12 +5,14 @@ import { DEFAULT_MAX_PER_DAY, MAX_DAYS, MIN_GAP_PCT } from '../src/core/backtest
 import { cleanTradingSettings } from '../src/core/tradingDesk.js';
 import { exportFileName } from '../src/utils/exportStocks.js';
 import { researchWorkbook } from '../src/utils/researchExport.js';
+import { reconcileDay, reconcileSummary } from '../src/utils/volumeReconcile.js';
 import { sameOriginOnly } from './orderRoutes.js';
 
 /**
  * Research (milestone 3, part 2), same-origin only. One job at a time, in the background:
  *   POST /api/research/backtest  { from, to, maxPerDay?, minGapPct?, settings? }  candle backtest
  *   POST /api/research/replay    { dates?, settings? }                            recorded mornings
+ *   POST /api/research/reconcile                  strategy D's volume check: recorded tick volumes vs Kite's minute bars
  *   POST /api/research/cancel
  *   GET  /api/research/status                     the job, the last results' headlines, recorded days
  *   GET  /api/research/result/:kind               the last full result (backtest | replay)
@@ -20,7 +22,7 @@ import { sameOriginOnly } from './orderRoutes.js';
  * `settings` (optional) overrides the saved trading settings for this run only; it is never saved.
  */
 export const QUIET = { from: '08:55', to: '09:35' };
-const KINDS = ['backtest', 'replay'];
+const KINDS = ['backtest', 'replay', 'reconcile'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const istTime = (d) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d);
 
@@ -45,7 +47,10 @@ export function addResearchRoutes(app, {
     const s = cleanTradingSettings(override && typeof override === 'object' ? override : tradingSettings());
     return { risk: s.risk, strategies: s.strategies, scoring: s.scoring };
   };
-  const headline = (r) => (r ? { ranAt: r.ranAt, first: r.first ?? r.days?.[0]?.date ?? null, last: r.last ?? r.days?.at(-1)?.date ?? null } : null);
+  const headline = (r) => (r ? {
+    ranAt: r.ranAt, first: r.first ?? r.days?.[0]?.date ?? null, last: r.last ?? r.days?.at(-1)?.date ?? null,
+    ...(r.verdict ? { verdict: r.verdict } : {}),
+  } : null);
 
   function compute(kind, payload, meta) {
     return new Promise((resolve, reject) => {
@@ -81,9 +86,9 @@ export function addResearchRoutes(app, {
   };
 
   app.get('/api/research/status', async (_req, res) => {
-    const [backtest, replay] = await Promise.all(KINDS.map((k) => store.read(`research/${k}-last.json`)));
+    const [backtest, replay, reconcile] = await Promise.all(KINDS.map((k) => store.read(`research/${k}-last.json`)));
     res.set('Cache-Control', 'no-store').json({
-      job: view(), last: { backtest: headline(backtest), replay: headline(replay) },
+      job: view(), last: { backtest: headline(backtest), replay: headline(replay), reconcile: headline(reconcile) },
       recordedTickDays: recordedTickDays(), quietNow: inResearchQuiet(now(), calendar), quiet: QUIET,
       limits: { maxDays: MAX_DAYS, maxPerDay: DEFAULT_MAX_PER_DAY, minGapPct: MIN_GAP_PCT }, kiteConnected: Boolean(session()?.accessToken),
     });
@@ -119,6 +124,29 @@ export function addResearchRoutes(app, {
     return start('replay', () => compute('replay', { dates, ticksDir, settings }, { ranAt: now().toISOString(), settings }));
   }));
 
+  app.post('/api/research/reconcile', (req, res) => send(res, () => {
+    const dates = recordedTickDays();
+    if (!dates.length) throw new Error('No recorded mornings yet: the collector records them on trading days.');
+    const sess = session();
+    if (!sess?.accessToken) { const e = new Error('Connect to Kite first: the check downloads Kite\'s minute bars for the recorded mornings.'); e.status = 409; throw e; }
+    return start('reconcile', async (j) => {
+      const { days } = await compute('reconcileTicks', { dates, ticksDir }, {});
+      const rows = [];
+      let n = 0;
+      const total = days.reduce((s, d) => s + d.stocks.length, 0);
+      for (const d of days) {
+        const candles = {};
+        for (const s of d.stocks) {
+          if (j.abort.signal.aborted) throw new Error('Cancelled.');
+          Object.assign(j, { stage: 'Kite 1-minute bars for the recorded stocks', done: n++, total });
+          candles[s.symbol] = (await data.minuteCandles(s.symbol, s.token, [d.date], sess))[d.date] ?? [];
+        }
+        rows.push(...reconcileDay(d.date, d.stocks, candles));
+      }
+      return { ranAt: now().toISOString(), dates: days.map((d) => d.date), ...reconcileSummary(rows), rows };
+    });
+  }));
+
   app.post('/api/research/cancel', (_req, res) => {
     if (job?.state === 'running') { job.abort.abort(); job.worker?.terminate(); }
     res.json({ job: view() });
@@ -132,14 +160,14 @@ export function addResearchRoutes(app, {
   });
 
   app.get('/api/research/export/:file', async (req, res) => {
-    const kind = /^(backtest|replay)\.xlsx$/.exec(req.params.file)?.[1];
+    const kind = /^(backtest|replay|reconcile)\.xlsx$/.exec(req.params.file)?.[1];
     if (!kind) return res.status(404).json({ error: 'Unknown export.' });
     const r = await store.read(`research/${kind}-last.json`);
     if (!r) return res.status(404).json({ error: 'No result yet.' });
     const bytes = researchWorkbook(kind, r);
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="${exportFileName(new Date(r.ranAt), kind === 'replay' ? 'Replay' : 'Backtest')}"`,
+      'Content-Disposition': `attachment; filename="${exportFileName(new Date(r.ranAt), { replay: 'Replay', reconcile: 'VolumeCheck' }[kind] ?? 'Backtest')}"`,
     }).send(Buffer.from(bytes));
   });
 

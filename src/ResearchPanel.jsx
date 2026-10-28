@@ -16,6 +16,7 @@ const pctTxt = (n) => (n == null ? '—' : `${Math.round(n * 100)}%`);
 const tone = (n) => (n > 0 ? 'adv-text' : n < 0 ? 'dec-text' : '');
 const addDays = (iso, n) => indiaDate(new Date(Date.parse(`${iso}T12:00:00+05:30`) + n * 86_400_000));
 
+const TAB_LABEL = { backtest: 'Candle backtest', replay: 'Tick replay', reconcile: 'Volume check' };
 const STAT_HEADERS = ['Trades', 'Win rate', 'Avg win', 'Avg loss', 'Profit factor', 'Net after costs', 'Max drawdown', 'Expectancy', 'Exp. R', 'Avg R:R', 'Losing streak'];
 function StatCells({ s }) {
   return (
@@ -138,6 +139,27 @@ function ReplayResult({ r }) {
   );
 }
 
+/** Strategy D's volume check (§5.2): recorded tick volumes per minute vs Kite's 1-minute bars. */
+function ReconcileResult({ r }) {
+  return (
+    <>
+      <div className={`alert ${r.verdict.matched ? 'info' : 'warn'}`}>{r.verdict.text}{r.hint ? ` ${r.hint}` : ''}</div>
+      <p className="hint">
+        {r.mornings} recorded morning(s): {r.dates.join(', ')}. Run {new Date(r.ranAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}.
+        {' '}{r.window.stockDays} complete stock-days; 09:15–09:19 total, ticks ÷ Kite median {f2(r.window.medianRatio)}.
+        Rule: every minute&apos;s median within ±{r.rule.tolerance * 100}%, {r.rule.minStockDays}+ stock-days, {r.rule.minMornings}+ mornings.
+        Until it matches, strategy D in paper mode stays DATA_INSUFFICIENT (Settings can switch that requirement off).
+      </p>
+      <div className="table-wrap">
+        <table className="research-table">
+          <thead><tr><th>Minute</th><th>Comparisons</th><th>Median ticks ÷ Kite</th><th>Within tolerance</th></tr></thead>
+          <tbody>{r.minutes.map((m) => <tr key={m.minute}><td>{m.minute}</td><td>{m.samples}</td><td>{f2(m.medianRatio)}</td><td>{pctTxt(m.shareWithin)}</td></tr>)}</tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
 /** Per-run overrides: the score and strategy thresholds (never saved; Settings keeps the paper-trading ones). */
 function Overrides({ o, set }) {
   const strat = (g, k, v) => set({ ...o, strategies: { ...o.strategies, [g]: { ...o.strategies[g], [k]: v } } });
@@ -183,6 +205,7 @@ export default function ResearchPanel() {
     refresh();
     loadResult('backtest');
     loadResult('replay');
+    loadResult('reconcile');
     api.trading?.state().then((s) => setOverrides({ risk: s.settings.risk, scoring: s.settings.scoring, strategies: s.settings.strategies })).catch(() => {});
   }, [refresh, loadResult]);
   const running = status?.job?.state === 'running';
@@ -199,6 +222,7 @@ export default function ResearchPanel() {
   const go = async (fn) => { setError(null); try { await fn(); await refresh(); } catch (e) { setError(e.message); } };
   const runBacktest = () => go(() => api.research.backtest({ ...form, settings: overrides }));
   const runReplay = () => go(() => api.research.replay({ settings: overrides }));
+  const runReconcile = () => go(() => api.research.reconcile());
   const job = status?.job;
   const r = results[tab];
 
@@ -227,25 +251,27 @@ export default function ResearchPanel() {
         <button type="button" className="btn" disabled={running || status?.quietNow || !status?.recordedTickDays?.length} onClick={runReplay}>
           Replay recorded mornings ({status?.recordedTickDays?.length ?? 0})
         </button>
+        <button type="button" className="btn" disabled={running || status?.quietNow || !status?.recordedTickDays?.length || !status?.kiteConnected} onClick={runReconcile}
+          title="Strategy D: compare recorded tick volumes with Kite's 1-minute bars (needs a Kite login)">Check D&apos;s volumes against Kite</button>
         {running && <button type="button" className="btn" onClick={() => go(() => api.research.cancel())}>Cancel</button>}
       </div>
       {status && !status.kiteConnected && <p className="hint">Kite isn&apos;t connected: the candle backtest needs a Kite login (Settings). Tick replay doesn&apos;t.</p>}
       {status?.quietNow && <p className="hint">Research waits until after {status.quiet.to} IST on trading days, so the opening window has the backend to itself.</p>}
       {job && (
         <div className={`alert ${job.state === 'failed' ? 'error' : 'info'}`}>
-          {job.kind === 'replay' ? 'Tick replay' : 'Candle backtest'}: {job.state}{job.state === 'running' ? ` — ${job.stage ?? ''} ${job.total ? `${job.done}/${job.total}` : ''}` : ''}{job.error ? ` — ${job.error}` : ''}
+          {{ replay: 'Tick replay', reconcile: 'Volume check' }[job.kind] ?? 'Candle backtest'}: {job.state}{job.state === 'running' ? ` — ${job.stage ?? ''} ${job.total ? `${job.done}/${job.total}` : ''}` : ''}{job.error ? ` — ${job.error}` : ''}
           {job.state === 'running' && job.total > 0 && <progress value={job.done} max={job.total} style={{ marginLeft: 8 }} />}
         </div>
       )}
       {error && <div className="alert error">{error}</div>}
 
       <div className="ai-row">
-        {['backtest', 'replay'].map((k) => (
-          <button key={k} type="button" className={`btn ${tab === k ? 'active' : ''}`} onClick={() => setTab(k)}>{k === 'backtest' ? 'Candle backtest' : 'Tick replay'}{results[k] ? '' : ' (none yet)'}</button>
+        {['backtest', 'replay', 'reconcile'].map((k) => (
+          <button key={k} type="button" className={`btn ${tab === k ? 'active' : ''}`} onClick={() => setTab(k)}>{TAB_LABEL[k]}{results[k] ? '' : ' (none yet)'}</button>
         ))}
         {r && <a className="btn" href={api.research.exportUrl(tab)} download>Export to Excel</a>}
       </div>
-      {r ? (tab === 'backtest' ? <BacktestResult r={r} /> : <ReplayResult r={r} />) : <p className="hint">No {tab === 'backtest' ? 'backtest' : 'replay'} has been run yet.</p>}
+      {r ? (tab === 'backtest' ? <BacktestResult r={r} /> : tab === 'replay' ? <ReplayResult r={r} /> : <ReconcileResult r={r} />) : <p className="hint">No {TAB_LABEL[tab].toLowerCase()} has been run yet.</p>}
       {r?.limitations?.length > 0 && (
         <details className="score-details">
           <summary>Limitations</summary>

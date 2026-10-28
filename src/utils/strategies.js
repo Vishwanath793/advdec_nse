@@ -33,6 +33,7 @@ export const DEFAULT_STRATEGY_SETTINGS = {
     bufferTicks: 2, bufferRangeFrac: 0.05, minSpreadSamples: 3, minBaselineSessions: 15, maxSpreadBps: 15,
     maxChaseR: 0.5, target1R: 2, target2R: 3, minFirstTargetRR: 1.5, entryDeadline: '09:21',
     maxQuoteAgeSec: 5, maxBarEndGapSec: 5, maxObservationGapSec: 10, // data-quality gates on live ticks
+    requireVolumeMatch: true, // paper trades only after the volume check (Report card → Research) matched
   },
 };
 /** Text settings and their allowed values (the rest are numbers or switches; entryDeadline is a time). */
@@ -189,11 +190,11 @@ export const PATTERN_STATES = ['BUILDING', 'SETUP_READY', 'BREAK_OBSERVED', 'WAI
 export const BREAK_HOLD_CODES = {
   shorts: 'SHORTS_OFF', history: 'INSUFFICIENT_VOLUME_HISTORY', breakoutVolume: 'WEAK_BREAKOUT_VOLUME', candle: 'WEAK_BREAKOUT_CANDLE',
   hold: 'HOLD_NOT_CONFIRMED', holdDepth: 'HOLD_TOO_DEEP', vwap: 'WRONG_SIDE_OF_VWAP', openingVolume: 'WEAK_OPENING_VOLUME',
-  spreadRef: 'DATA_INSUFFICIENT', baseline: 'DATA_INSUFFICIENT', resets: 'DATA_INSUFFICIENT', bars: 'DATA_INSUFFICIENT', freshness: 'STALE_QUOTE',
+  spreadRef: 'DATA_INSUFFICIENT', baseline: 'DATA_INSUFFICIENT', resets: 'DATA_INSUFFICIENT', bars: 'DATA_INSUFFICIENT', freshness: 'STALE_QUOTE', reconciled: 'DATA_INSUFFICIENT',
   spread: 'SPREAD_TOO_WIDE', beyond: 'PRICE_BACK_INSIDE', chase: 'EXTENDED_ENTRY', obstacle: 'OBSTACLE_TOO_CLOSE',
 };
 // Checks about the data itself (a failure means "can't tell", not "the pattern failed") and about execution.
-const DATA_KEYS = new Set(['history', 'spreadRef', 'baseline', 'resets', 'bars', 'freshness']);
+const DATA_KEYS = new Set(['history', 'spreadRef', 'baseline', 'resets', 'bars', 'freshness', 'reconciled']);
 const EXECUTION_KEYS = new Set(['shorts', 'spread', 'beyond', 'chase', 'obstacle']);
 const MINUTE_LABEL = ['09:15', '09:16', '09:17', '09:18', '09:19'];
 const tickUp = (p, tick) => Math.round(Math.ceil(p / tick - 1e-9) * tick * 100) / 100;
@@ -307,6 +308,10 @@ export function breakAndHold(f, cfg = DEFAULT_STRATEGY_SETTINGS.breakHold, { ref
   const q = f.quality ?? {};
   check.book(f, 'baseline', 'Volume counted from a known start', q.volumeBaseline !== 'first window tick (estimated)', `start: ${q.volumeBaseline ?? 'unknown'}`);
   check.book(f, 'resets', 'No volume resets', !(q.resets > 0), `${q.resets ?? 0} cumulative-volume resets`);
+  if (cfg.mode === 'paper' && cfg.requireVolumeMatch) {
+    check.book(f, 'reconciled', 'Live volume matches Kite\'s minute bars', cfg.volumeMatched === true,
+      cfg.volumeMatched === true ? 'the volume check matched' : 'not established yet: run the volume check on the Report card (Research)');
+  }
   const mq = f.minuteQuality ?? [];
   const badBar = [0, 1, 2, 3, 4].find((i) => !mq[i] || mq[i].endGapSec > cfg.maxBarEndGapSec || mq[i].maxGapSec > cfg.maxObservationGapSec);
   check.book(f, 'bars', 'Every minute well observed', badBar === undefined,

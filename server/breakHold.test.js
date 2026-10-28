@@ -14,7 +14,7 @@ import { runVariant, dayFeatures } from '../src/utils/backtestRunner.js';
 
 const DATE = '2026-10-19';
 const cdl = (o, h, l, c, volume = 500) => ({ o, h, l, c, volume, approximate: true });
-const PAPER = { ...DEFAULT_STRATEGY_SETTINGS.breakHold, mode: 'paper' };
+const PAPER = { ...DEFAULT_STRATEGY_SETTINGS.breakHold, mode: 'paper', volumeMatched: true }; // as if the volume check had matched
 
 function longFeatures(over = {}) {
   return {
@@ -133,7 +133,7 @@ test('decision: shadow mode shows D but never trades it; paper mode trades it un
   const sealed = { date: DATE, sealedAt: `${DATE}T03:50:01.500Z`, stocks: [longFeatures()] };
   const onlyD = (mode) => ({
     orb: { enabled: false }, gapPullback: { enabled: false }, momentum: { enabled: false },
-    breakHold: { ...DEFAULT_STRATEGY_SETTINGS.breakHold, mode },
+    breakHold: { ...DEFAULT_STRATEGY_SETTINGS.breakHold, mode, volumeMatched: true },
   });
   const risk = { capital: 1_000_000, slippageBps: 0 };
   const shadow = decideOpening(sealed, { strategies: onlyD('shadow'), risk }).decisions[0];
