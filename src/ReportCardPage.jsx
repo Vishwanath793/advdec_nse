@@ -3,6 +3,7 @@ import { api } from './platform/index.js';
 import { CONVICTION_FACTORS, factorWeights } from './utils/conviction.js';
 import { MARKET_WIDE_RHO, MIN_RHOS_FOR_VERDICT, PICKS_PER_DAY } from './utils/reportCard.js';
 import { STATUS_LABEL } from './utils/confirmation.js';
+import ResearchPanel from './ResearchPanel.jsx';
 
 const share = (x) => (x == null ? '—' : `${Math.round(x * 100)}%`);
 const rho = (x) => (x == null ? '—' : x.toFixed(2));
@@ -288,6 +289,7 @@ export default function ReportCardPage({ factorSettings }) {
           )}
         </>
       )}
+      <ResearchPanel />
     </div>
   );
 }

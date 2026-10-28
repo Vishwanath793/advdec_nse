@@ -690,6 +690,11 @@ body {
 .field-inline input, .field-inline select { padding: 5px 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
 .trading-settings h4 { margin: 14px 0 6px; }
 .score-details { margin: 8px 0; }
+.research-panel { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 12px; }
+.research-table { border-collapse: collapse; font-size: 0.82rem; white-space: nowrap; }
+.research-table th, .research-table td { padding: 3px 8px; border-bottom: 1px solid var(--border); text-align: right; }
+.research-table th:first-child, .research-table td:first-child { text-align: left; }
+.research-panel .btn.active { border-color: var(--accent); color: var(--accent); }
 .score-details summary { cursor: pointer; color: var(--muted); margin-bottom: 6px; }
 .factor-table { border-collapse: collapse; font-size: 0.85rem; }
 .factor-table th, .factor-table td { padding: 3px 8px; border-bottom: 1px solid var(--border); text-align: left; }

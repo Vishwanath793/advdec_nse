@@ -177,7 +177,7 @@ export function TradingPanel() {
   );
 }
 
-const STRATEGY_FIELDS = {
+export const STRATEGY_FIELDS = {
   orb: [
     ['minRvol', 'Min RVOL'], ['minClosePos', 'Min close position (0–1)'], ['minRangeAtr', 'Min range × ATR'], ['maxRangeAtr', 'Max range × ATR'],
     ['wideRangeAtr', 'Wide range × ATR (stop at the midpoint)'], ['sectorTolerancePct', 'Sector may be against by (%)'], ['maxSpreadBps', 'Max spread (bps)'],
@@ -300,7 +300,7 @@ const RISK_FIELDS = [
   ['maxTradesPerDay', 'Max trades a day'], ['minRewardRisk', 'Min reward/risk (after costs)'], ['maxConsecutiveLosses', 'Stop after losses in a row'],
   ['misLeverage', 'MIS leverage (check your broker)'], ['slippageBps', 'Paper slippage (bps)'], ['maxSlippageBps', 'Max entry slippage (bps)'], ['maxSpreadBps', 'Max spread (bps)'],
 ];
-const LABELS = { orb: 'A. Opening-range breakout / breakdown', gapPullback: 'B. Gap-up pullback recovery (≥ 3.75% gap)', momentum: 'C. Opening momentum' };
+export const STRATEGY_LABELS = { orb: 'A. Opening-range breakout / breakdown', gapPullback: 'B. Gap-up pullback recovery (≥ 3.75% gap)', momentum: 'C. Opening momentum' };
 
 const GAP_FIELDS = [
   ['noiseAtr', 'Noise stop floor (× ATR)'], ['gapLineBufferAtr', 'Buffer below the half-gap (× ATR)'], ['wideStopAtr', 'Large/extreme stop (× ATR)'], ['maxStopAtr', 'Widest stop (× ATR)'],
@@ -415,7 +415,7 @@ export function TradingSettings() {
       <ScoreFields sc={s.scoring} set={(scoring) => setS({ ...s, scoring })} />
       {Object.entries(STRATEGY_FIELDS).map(([g, fields]) => (
         <div key={g}>
-          <h4><label><input type="checkbox" checked={s.strategies[g].enabled} onChange={(e) => setStrat(g, 'enabled', e.target.checked)} /> {LABELS[g]}</label></h4>
+          <h4><label><input type="checkbox" checked={s.strategies[g].enabled} onChange={(e) => setStrat(g, 'enabled', e.target.checked)} /> {STRATEGY_LABELS[g]}</label></h4>
           <div className="trading-grid">
             {fields.map(([k, label]) => (
               <label key={k} className="field-inline">{label}<input type="number" step="any" value={s.strategies[g][k]} onChange={(e) => setStrat(g, k, e.target.value)} /></label>

@@ -151,6 +151,37 @@ for every strategy). The paper trades go to a separate *Simulated replay* ledger
 mixed with today's. Expected result: ORBUP and MOMO are bought; ORBUP exits at T1 and T2, MOMO at its stop. The
 rest are NO TRADE, each with a reason.
 
+**Everything is adjustable** (Settings → 09:20 trading): each strategy threshold; the score preset (*every factor by
+its own weight*, *research groups*, or *my own group weights*); each factor's on/off switch and weight (0–10 within
+its group); the tiers; every factor's pass/warn line and the minimum ticks; the Zerodha charge rates (with the date
+you checked them); and the opening universe (minimum 09:10 gap, watchlist, futures). The defaults are the values
+above. **Restore the defaults** puts them back. A factor switched off still shows its reading in the candidate
+detail, marked "not scored".
+
+### Research: backtests and tick replay (milestone 3)
+
+On the **Report card** tab, under the report, the **Research** section (badge **BACKTEST**: nothing is traded). The
+backend runs one job at a time in the background (a worker thread), never 08:55–09:35 IST on trading days.
+
+- **Candle backtest** (needs a Kite login): pick a period (up to 60 trading days), the number of stocks a day and the
+  minimum gap. Each day's stocks are the biggest gaps at the open in NSE's end-of-day files (open vs the previous
+  close; above 20% is skipped as a likely corporate action). Kite historical 1-minute candles for them, the ten
+  days before (the RVOL baseline) and the indices are downloaded once at 3 requests a second and cached in
+  `.data/candles/`; a second run of the same period makes no Kite calls. The same strategies, score, plan and
+  limits run on the candles; fills resolve every ambiguity against the trade (`candleFills.js`). It compares the
+  combined decision, A, B and C alone, a simple opening-range baseline and the 09:10 conviction alone (recorded
+  days only), with breakdowns by strategy, gap, RVOL, sector and Nifty regime, slippage sensitivity, parameter
+  ranges, a 70/30 out-of-sample split and a 4-fold walk-forward.
+- **Tick replay**: the mornings the collector recorded (`.data/ticks/`), through the same window, decision and paper
+  ledger as live: the only test of the order-book rules. Recordings end at 09:25, so what's still open then closes
+  at the last recorded bid/ask.
+- **Settings for this run** override the score and strategy thresholds for that run only (never saved).
+- **Export to Excel**: every table, the trades, the limitations and the settings used.
+
+Candles can't test depth, spread, F&O or circuit rules (marked "not tested"); the universe uses today's master
+list and instrument tokens (survivorship bias). Results on a few weeks are a small sample: look for settings that
+hold up across the parameter ranges and out of sample, not the single best number.
+
 ## TV research: Zee Business + CNBC Awaaz
 
 Open **TV research** in the navigation. This is a Node.js scheduler plus React dashboard integrated into the existing application. It uses the **OpenAI API**, which is billed separately from a ChatGPT subscription; results appear here and in local files, not in ChatGPT website history.

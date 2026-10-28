@@ -5,9 +5,12 @@
 
 export const TIMEZONE = 'Asia/Kolkata';
 
+// Reused: building an Intl.DateTimeFormat on every call is slow in loops over candles.
+const IST_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' });
+
 /** Calendar date (YYYY-MM-DD) in India for an instant. */
 export function indiaDate(now = new Date()) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  return IST_DATE.format(now);
 }
 
 export function parseDate(date) {

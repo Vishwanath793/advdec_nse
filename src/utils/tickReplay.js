@@ -4,7 +4,7 @@ import { applyEvent, emptyLedger, orderEvents, stepTick } from './paperLedger.js
 import { cleanRiskSettings } from './risk.js';
 import { strategySettings } from './strategies.js';
 import { istInstant } from '../core/calendar.js';
-import { regimeOf } from './backtestStats.js';
+import { breakdown, gapBucket, GAP_BUCKETS, regimeOf, REGIMES, rvolBucket, RVOL_BUCKETS, summarize } from './backtestStats.js';
 
 /**
  * Tick replay of a recorded morning (milestone 3): the recorded Kite WebSocket
@@ -66,4 +66,31 @@ export function replayRecordedDay(rec, settings = {}) {
   });
   const notFilled = state.orders.filter((o) => o.filledQty === 0).map((o) => ({ date: rec.date, symbol: o.symbol, strategy: o.strategy, status: o.status, reason: o.reason }));
   return { date: rec.date, decisions: decision.decisions.filter((d) => d.decision !== 'NO TRADE').length, trades, notFilled };
+}
+
+/**
+ * Many recorded mornings together (`results`: replayRecordedDay outputs, oldest first):
+ * per-day lines, the summary and breakdowns over every closed trade, and the trade list.
+ * Exits after the recording ends (09:25) can't be judged: they close at the last bid/ask.
+ */
+export function replayReport(results) {
+  const trades = results.flatMap((r) => r.trades);
+  const closed = trades.filter((t) => t.status === 'CLOSED');
+  return {
+    days: results.map((r) => ({ date: r.date, decisions: r.decisions, trades: r.trades.length, summary: summarize(r.trades) })),
+    summary: summarize(trades),
+    breakdowns: {
+      strategy: breakdown(closed, (t) => t.strategy),
+      gap: breakdown(closed, gapBucket, GAP_BUCKETS),
+      rvol: breakdown(closed, rvolBucket, RVOL_BUCKETS),
+      sector: breakdown(closed, (t) => t.sector),
+      regime: breakdown(closed, (t) => t.regime, REGIMES),
+    },
+    trades: closed.map(({ plan, ...t }) => ({ ...t, r: t.r != null ? Math.round(t.r * 100) / 100 : null, rewardRisk: plan?.rewardRisk ?? null })),
+    notFilled: results.flatMap((r) => r.notFilled),
+    limitations: [
+      'Recorded mornings end at 09:25: positions still open then are closed at the last recorded bid/ask, so later exits (targets, stops, the 15:10 square-off) are not judged.',
+      'Fills use the recorded five-level book plus slippage; queue position, hidden liquidity and latency are not modelled.',
+    ],
+  };
 }

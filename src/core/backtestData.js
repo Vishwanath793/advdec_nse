@@ -1,4 +1,4 @@
-import { indiaDate, previousTradingDays } from './calendar.js';
+import { indiaDate, marketDay, previousTradingDays } from './calendar.js';
 import { createRateLimiter, openingVolumeAverage } from './kiteHistory.js';
 import { sectorIndexKey } from '../utils/confirmation.js';
 
@@ -30,6 +30,8 @@ export const BASELINE_DAYS = 10;
 const ATR_PERIOD = 14;
 const MARKET_INDICES = ['NIFTY 50', 'NIFTY BANK'];
 const cacheFile = (name) => `candles/${name}.json`;
+/** Cache name for an index ("NIFTY 50" → "IDX_NIFTY_50"), so it can't clash with a stock symbol. */
+export const indexCacheName = (name) => `IDX_${String(name).toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
 
 /** Simple ATR over the last `period` completed days (oldest first): [{ high, low, close }]. */
 export function atrFromBhavDays(days, period = ATR_PERIOD) {
@@ -94,7 +96,20 @@ const asDate = (rows) => rows.map(([ms, ...rest]) => [new Date(ms), ...rest]);
  * `kite` is the shared Kite client (historical()); `instruments.load(session)` gives the token lookup.
  * Nothing here can place an order.
  */
-export function createBacktestData({ store, kite, instruments, calendar, now = () => new Date(), limiter = createRateLimiter(3) }) {
+/** Trading days from `from` to `to` (inclusive, oldest first), before `today`, at most MAX_DAYS (the latest). */
+export function tradingDaysBetween(from, to, calendar, today) {
+  const out = [];
+  for (let d = from; d <= to && d < today; d = addDays(d, 1)) if (marketDay(d, calendar).open) out.push(d);
+  return out.slice(-MAX_DAYS);
+}
+
+/**
+ * `kite` is the shared Kite client (historical()); `instruments.load(session)` gives the token lookup;
+ * `context.day(iso)` is an end-of-day file (utils/marketContext.js); `sectors()` the master list's
+ * Map SYMBOL → sector; `recordedScores(date)` the 09:10 conviction of a recorded day ({ SYM: { score, flags } }) or null.
+ * Nothing here can place an order.
+ */
+export function createBacktestData({ store, kite, instruments, calendar, context = null, sectors = () => new Map(), recordedScores = async () => null, now = () => new Date(), limiter = createRateLimiter(3) }) {
   /** 1-minute candles for `name` on each of `needed` days, downloading only the days not cached. Returns { date: rows }. */
   async function minuteCandles(name, token, needed, session, onCall = () => {}) {
     const today = indiaDate(now());
@@ -118,7 +133,79 @@ export function createBacktestData({ store, kite, instruments, calendar, now = (
     return Object.fromEntries(needed.map((d) => [d, cache.days[d] ?? null]));
   }
 
-  return { minuteCandles };
+  /**
+   * The days runBacktest needs for `from`..`to`: { days, skipped, requests }.
+   * `onProgress({ stage, done, total })`; `signal` stops it between downloads.
+   */
+  async function loadDays({ from, to, minGapPct = MIN_GAP_PCT, maxPerDay = DEFAULT_MAX_PER_DAY, session, onProgress = () => {}, signal = null }) {
+    const stop = () => { if (signal?.aborted) throw new Error('Cancelled.'); };
+    const dates = tradingDaysBetween(from, to, calendar, indiaDate(now()));
+    if (!dates.length) throw new Error('No completed trading days in that period.');
+    if (!context?.day) throw new Error('End-of-day files are not available.');
+
+    // End-of-day files: the tested days and the 20 trading days before the first (previous day, ATR(14)).
+    const eod = [...previousTradingDays(dates[0], 20, calendar).reverse(), ...dates];
+    const bhav = new Map();
+    const noEndOfDay = [];
+    for (const [i, d] of eod.entries()) {
+      stop();
+      onProgress({ stage: 'NSE end-of-day files', done: i, total: eod.length });
+      const rows = await context.day(d).catch(() => null);
+      if (rows && Object.values(rows).some((r) => r.open > 0)) bhav.set(d, rows);
+      else noEndOfDay.push(d);
+    }
+    const scores = new Map();
+    for (const d of dates) {
+      const s = await recordedScores(d).catch(() => null);
+      if (s) scores.set(d, s);
+    }
+    const plan = planBacktest({ dates, bhav, sectors: sectors(), scores, minGapPct, maxPerDay });
+
+    const ix = await instruments.load(session);
+    const need = neededDays(plan, calendar);
+    let requests = 0;
+    const onCall = () => { requests += 1; };
+    const noToken = [];
+    const stockCandles = new Map();
+    let done = 0;
+    for (const [symbol, days] of need) {
+      stop();
+      onProgress({ stage: 'Kite 1-minute candles (stocks)', done: done++, total: need.size });
+      const e = ix.equity(symbol);
+      if (!e) { noToken.push(symbol); continue; }
+      stockCandles.set(symbol, { e, days: await minuteCandles(symbol, e.token, days, session, onCall) });
+    }
+    const indexNames = [...new Set([...MARKET_INDICES, ...plan.days.flatMap((d) => d.stocks.map((s) => s.meta.sectorIndex)).filter(Boolean)])];
+    const indexCandles = new Map();
+    done = 0;
+    for (const name of indexNames) {
+      stop();
+      onProgress({ stage: 'Kite 1-minute candles (indices)', done: done++, total: indexNames.length });
+      const token = ix.index(name);
+      if (token) indexCandles.set(name, await minuteCandles(indexCacheName(name), token, dates, session, onCall));
+    }
+
+    const noCandles = [];
+    const days = plan.days.map((d) => {
+      const baseline = previousTradingDays(d.date, BASELINE_DAYS, calendar);
+      const stocks = [];
+      for (const s of d.stocks) {
+        const c = stockCandles.get(s.symbol);
+        const today = c?.days[d.date];
+        if (!c) continue;
+        if (!today?.length) { noCandles.push(`${d.date} ${s.symbol}`); continue; }
+        // The RVOL baseline: the ten trading days before, never the tested day or later.
+        const base = openingVolumeAverage(asDate(baseline.flatMap((b) => c.days[b] ?? [])), d.date);
+        stocks.push({ meta: { ...s.meta, token: c.e.token, tick: c.e.tick, lot: c.e.lot, openVol5Avg: base?.avg ?? null }, candles: asDate(today) });
+      }
+      const indices = Object.fromEntries([...indexCandles].map(([name, byDay]) => [name, asDate(byDay[d.date] ?? [])]));
+      return { date: d.date, recorded: d.recorded, stocks, indices };
+    }).filter((d) => d.stocks.length);
+    onProgress({ stage: 'Data ready', done: 1, total: 1 });
+    return { days, skipped: { ...plan.skipped, noEndOfDay, noToken, noCandles }, requests, tested: dates.length };
+  }
+
+  return { minuteCandles, loadDays };
 }
 
 /**

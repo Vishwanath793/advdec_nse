@@ -40,6 +40,42 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-28: 09:20 system phase 2: milestone 3 part 2, research data, routes, UI, export (Claude Code for vinayakb374, android-app, local commit)
+**What changed:** Vishwanath793's paused milestone 3 part 2, taken over with the owner's OK, finished.
+- **Data** (`src/core/backtestData.js`): `loadDays` builds runBacktest's days from NSE end-of-day files (biggest gaps
+  at the open, via `marketContext.day`, which re-downloads old files once for the open column), recorded days'
+  09:10 conviction (rebuilt as the report card does), Kite 1-minute candles for the stocks, their ten baseline days
+  and the indices (cached in `.data/candles/`, 3 requests a second), and the RVOL baseline from earlier days only.
+  `tradingDaysBetween`; skipped days and stocks are reported.
+- **Routes** (`server/researchRoutes.js`, same-origin): one background job at a time; data loads on the main thread,
+  the computation in a worker (`server/researchWorker.js`); refused 08:55–09:35 IST on trading days and without a
+  Kite session (candles only); cancel; results saved to `.data/research/{backtest,replay}-last.json`; Excel export.
+  Per-run settings override the saved trading settings without saving them.
+- **Tick replay over many days**: `replayReport` in `tickReplay.js`.
+- **UI**: `src/ResearchPanel.jsx` on the Report card (BACKTEST badge): period, stocks a day, minimum gap, settings
+  for this run, progress, comparison, breakdowns, slippage, parameter ranges, out of sample, walk-forward, trades,
+  limitations, Excel. Hidden on Android (`api.research` null).
+- **Export**: `src/utils/researchExport.js` (About, Comparison, Breakdowns, Slippage, Sweeps, Out of sample,
+  Walk-forward, Trades, Not filled, Settings) through `buildXlsx`.
+- **Speed fix**: `candleFills.js`, `candleWindow.js`, `kiteHistory.js` and `calendar.js` built a new
+  `Intl.DateTimeFormat` on every call; the fill loop did that ~140k times per trade (≈12 s per variant on 10 days ×
+  5 stocks). Now one formatter per module and candles indexed by minute: the same run takes under 4 s in total.
+- The paused `server/backtestData.test.js` was cut off mid-line and its fixture was wrong (AAA's 5% gap never
+  happened; every day "gapped" 1%; the ATR expectation was 5 for a true range of 4). Fixed and finished.
+**Files:** src/core/backtestData.js, calendar.js, kiteHistory.js; src/utils/tickReplay.js, candleFills.js,
+candleWindow.js, new researchExport.js; new server/researchRoutes.js, researchWorker.js; server/index.js;
+new src/ResearchPanel.jsx; src/ReportCardPage.jsx, TradingPanel.jsx (exports the strategy fields), platform/web.js,
+android.js, styles.css; README.md, android/README.md; tests server/backtestData.test.js (7) and new
+server/researchRoutes.test.js (4), both in the test script.
+**Tests / checks:** npm test (341 pass), npm run build, npx cap sync android. Real runs on :3002 (backend task
+restarted, no pending orders): tick replay of the one recorded morning (2026-10-22): 2 ORB trades, +₹203 net,
+closed at the recording's end. Candle backtest 14–27 Oct, 5 stocks a day: 9 days, 35 stock-days (4 symbols had
+no Kite token), all six variants, out-of-sample split, 3 walk-forward steps, Excel export 200. Far too small a
+sample to mean anything.
+**Not verified:** a full 60-day × 15-stock run (time and Kite request count); the Excel file opened in Excel
+(checked as a zip with the right sheets); the cancel button clicked in the browser (tested through the route).
+**Next:** phase 3 (strategy D).
+
 ### 2026-10-28: 09:20 system phase 1: every factor adjustable (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** nothing in the 09:20 score, strategies, charges or universe is fixed in code any more; the
 defaults are the old constants, so results are unchanged until you change a setting (a test checks this).

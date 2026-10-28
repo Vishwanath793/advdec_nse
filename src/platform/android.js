@@ -220,6 +220,7 @@ export function createAndroidApi() {
       get: (factorSettings) => recorder.report(factorSettings),
     },
     // The AI Analyst needs the PC backend (the provider key is kept there, never in the APK).
+    research: null, // backtests and tick replay run on the PC backend
     ai: null,
     kite,
   };

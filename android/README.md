@@ -23,6 +23,9 @@ calls the OpenAI API, so it stays on the PC version.
 **Not available: the AI Analyst.** It runs on the PC backend, which holds the provider key; the phone has no secure
 backend connection, so the tab says it is unavailable. No AI key is ever put in the APK.
 
+**Not available: Research (backtests and tick replay).** They run on the PC backend; the Report card tab on the
+phone shows the report without the Research section.
+
 ## Install
 
 1. On your phone, open **https://github.com/Vishwanath793/advdec_nse/releases/tag/android-latest**

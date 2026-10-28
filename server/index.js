@@ -29,6 +29,8 @@ import { createAuctionTracker } from '../src/core/auctionTracker.js';
 import { snapshotDate } from '../src/core/recorder.js';
 import { analyze } from '../src/utils/analysis.js';
 import { createTickLog } from './tickLog.js';
+import { addResearchRoutes } from './researchRoutes.js';
+import { createBacktestData } from '../src/core/backtestData.js';
 import { addOpeningRoutes } from './openingRoutes.js';
 import { createEventLog } from './eventLog.js';
 import { addTradingRoutes } from './tradingRoutes.js';
@@ -360,7 +362,6 @@ const tradingDesk = createTradingDesk({
   settings: () => readJsonFile('trading-settings.json') ?? {},
   onUpdate: () => broadcastOpening(),
   gapList: gapEntries,
-  // A stock outside today's opening universe: its 09:10 pre-open row, with the ATR estimated.
   // A stock outside today's opening universe (e.g. opted in after 09:10): its pre-open row, plus Kite's ATR fetched for it.
   gapFallback: createGapFallback({ preopenStocks, instruments: instrumentService, history: historyService, session: () => kiteSession }),
 });
@@ -429,6 +430,23 @@ app.put('/api/opening/settings', (req, res) => {
 addTradingRoutes(app, tradingDesk, {
   settingsFile: `${dataDir}/trading-settings.json`, log: paperLog, gapListFile: `${dataDir}/gap915-list.json`, paperDir: `${dataDir}/paper`,
   live: gapLive, liveFile: `${dataDir}/gap-live.json`, calendar,
+});
+// Research (milestone 3): candle backtests from Kite historical candles and tick replay of recorded mornings.
+addResearchRoutes(app, {
+  store: fsStore(dataDir), calendar, ticksDir: `${dataDir}/ticks`,
+  session: () => kiteSession,
+  tradingSettings: () => readJsonFile('trading-settings.json') ?? {},
+  data: createBacktestData({
+    store: fsStore(dataDir), kite, instruments: instrumentService, calendar, context: marketContext,
+    sectors: () => new Map(currentMasterRows().map((m) => [String(m.Symbol ?? '').trim().toUpperCase(), String(m.Industry || 'Unknown').trim()]).filter(([s]) => s)),
+    // A recorded morning's 09:10 conviction and flags, rebuilt as the report card does (current conviction factors).
+    recordedScores: async (date) => {
+      const inputs = await recorder.dayInputs(date);
+      if (!inputs) return null;
+      const { stocks } = analyze(inputs.rows, inputs.masterRows, inputs.secList, { convictionFactors: readJsonFile('export-settings.json')?.factorSettings ?? null, context: inputs.context });
+      return Object.fromEntries(stocks.map((s) => [s.symbol, { score: s.convictionScore ?? null, flags: s.flags ?? [] }]));
+    },
+  }),
 });
 const wakeOpening = () => openingCollector.wake()
   .then(() => tradingDesk.wake({ sealedFor: openingCollector.sealedFor }))

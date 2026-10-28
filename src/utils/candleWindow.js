@@ -16,7 +16,9 @@
  */
 
 const pct = (a, b) => (a != null && b ? ((a - b) / b) * 100 : null);
-const ist = (d) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
+// One formatter, reused: building an Intl.DateTimeFormat per call is slow in backtest loops.
+const IST_HHMM = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+const ist = (d) => IST_HHMM.format(d);
 
 /** The five 1-minute candles 09:15–09:19 (index 0–4) from a day's candles ([Date, o, h, l, c, v]). */
 export function windowCandles(candles) {

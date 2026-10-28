@@ -139,6 +139,15 @@ export function createWebApi() {
       status: () => json(fetch('/api/report-card/status')),
       get: (factorSettings) => json(post('/api/report-card', { factorSettings })),
     },
+    /** Research (milestone 3): candle backtests and tick replay on the backend, read-only. */
+    research: {
+      status: () => json(fetch('/api/research/status')),
+      backtest: (body) => json(post('/api/research/backtest', body)),
+      replay: (body) => json(post('/api/research/replay', body)),
+      cancel: () => json(post('/api/research/cancel', {})),
+      result: (kind) => json(fetch(`/api/research/result/${kind}`)),
+      exportUrl: (kind) => `/api/research/export/${kind}.xlsx`,
+    },
     /** AI Analyst (read-only research on the backend; the provider key stays there). */
     ai: {
       status: () => json(fetch('/api/ai/status')),

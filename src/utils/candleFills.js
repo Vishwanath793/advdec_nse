@@ -29,7 +29,9 @@ import { cleanRiskSettings } from './risk.js';
  *    triggers, as in paper trading.
  */
 
-const ist = (d) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
+// One formatter, reused: building an Intl.DateTimeFormat per call is slow in backtest loops.
+const IST_HHMM = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+const ist = (d) => IST_HHMM.format(d);
 const r2 = (n) => Math.round(n * 100) / 100;
 
 /** Simulate one day's BUY/SELL decisions. `candlesBySymbol`: { SYM: [[Date, o, h, l, c, v], ...] }. */
@@ -44,8 +46,16 @@ export function simulateCandleDay({ date, decisions, candlesBySymbol, risk = {},
   let realised = 0;
   let streak = 0;
   // Every minute from 09:20 to the square-off, in time order across all trades.
-  const minutes = [...new Set(trades.flatMap((t) => (candlesBySymbol[t.symbol] ?? []).map((c) => ist(c[0])).filter((m) => m >= '09:20')))].sort();
-  const candleAt = (t, m) => (candlesBySymbol[t.symbol] ?? []).find((c) => ist(c[0]) === m) ?? null;
+  // Each symbol's candles by IST minute, built once (the first candle of a minute wins, as find() did).
+  const byMinute = new Map();
+  for (const t of trades) {
+    if (byMinute.has(t.symbol)) continue;
+    const m = new Map();
+    for (const c of candlesBySymbol[t.symbol] ?? []) { const k = ist(c[0]); if (!m.has(k)) m.set(k, c); }
+    byMinute.set(t.symbol, m);
+  }
+  const minutes = [...new Set([...byMinute.values()].flatMap((m) => [...m.keys()].filter((k) => k >= '09:20')))].sort();
+  const candleAt = (t, m) => byMinute.get(t.symbol)?.get(m) ?? null;
   const exit = (t, qty, price, kind, m) => {
     t.exits.push({ qty, price: r2(price), kind, at: m });
     t.open -= qty;
