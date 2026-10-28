@@ -50,7 +50,7 @@ export function createGapLiveExits({
   };
   const pos = (id) => state.positions.find((p) => p.id === id);
   const active = () => (state?.positions ?? []).filter((p) => p.status === 'ENTRY' || p.status === 'OPEN');
-  const armed = () => { const c = cfg(); return Boolean(c.enabled) && c.armedFor === today(); };
+  const armed = (date = today()) => { const c = cfg(); return Boolean(c.enabled) && c.armedFor === date; };
   const times = () => ({
     checkAt: instant('09:20') + GAP_CHECK_FALLBACK_MS,
     timeStopAt: instant(cfg().gapExits?.timeStopAt ?? '09:45'),
@@ -350,6 +350,8 @@ export function createGapLiveExits({
   return {
     setSession(x) { session = x?.accessToken && x?.apiKey ? { apiKey: x.apiKey, accessToken: x.accessToken } : null; if (session) load().catch(() => {}); },
     armed,
+    /** Whether live gap exits are on, and armed for `date` (the scheduler's warning and its send check). */
+    status: (date = today()) => ({ enabled: Boolean(cfg().enabled), armed: armed(date) }),
     load,
     /** The scheduler placed an opted-in order: follow it (its fill, then the SL-M and the exits). */
     async track(o) {
@@ -364,6 +366,7 @@ export function createGapLiveExits({
         position: {
           id: o.id, symbol: o.symbol, side: o.side, d: o.side === 'SELL' ? -1 : 1, token: inst?.token ?? null, tick: inst?.tick ?? plan?.tick ?? 0.05, lot: inst?.lot ?? 1,
           entry: { orderId: o.result?.orderId ?? null, tag: o.tag || null, qty: o.sendQuantity ?? o.quantity }, plan: plan?.ok ? plan : null,
+          seq: (Number(String(o.id).replace(/\D/g, '')) || 0) * 100 + 1,
         },
       });
       const p = pos(o.id);

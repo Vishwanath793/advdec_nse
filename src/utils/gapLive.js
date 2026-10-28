@@ -34,7 +34,7 @@ export function applyLive(state, e) {
       if (!state.positions.some((x) => x.id === e.position.id)) {
         state.positions.push({
           ...e.position, entry: { ...e.position.entry, filled: 0, avg: null, status: 'OPEN' }, levels: null, stop: null,
-          qty: 0, exitedQty: 0, t1Done: false, exits: [], status: 'ENTRY', flags: [], seq: 1, placing: [], check0920: null, timeChecked: false, trackedAt: e.at,
+          qty: 0, exitedQty: 0, t1Done: false, exits: [], status: 'ENTRY', flags: [], seq: e.position.seq ?? 1, placing: [], check0920: null, timeChecked: false, trackedAt: e.at,
         });
       }
       break;
@@ -91,7 +91,10 @@ export function applyLive(state, e) {
 
 export const rebuildLive = (date, events) => events.reduce(applyLive, liveEmpty(date));
 
-/** The next unique tag for a role of this position (alphanumeric, ≤ 20 characters). */
+/**
+ * The next unique tag for a role of this position (alphanumeric, ≤ 20 characters). The sequence starts at the
+ * scheduled order's number × 100 + 1, so two positions in the same stock on one day never share a tag.
+ */
 export const nextTag = (state, p, role) => liveTag(state.date, p.symbol, role, p.seq);
 
 /** Order-book rows by order id and by tag. */

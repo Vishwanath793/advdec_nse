@@ -34,6 +34,7 @@ import { createEventLog } from './eventLog.js';
 import { addTradingRoutes } from './tradingRoutes.js';
 import { cleanTradingSettings, createTradingDesk } from '../src/core/tradingDesk.js';
 import { createGapLiveExits } from '../src/core/gapLiveExits.js';
+import { createGapFallback } from '../src/core/gapInputs.js';
 import { addOrderRoutes, sameOriginOnly } from './orderRoutes.js';
 import { indiaDate, istInstant } from '../src/core/calendar.js';
 import { gapEntriesFor } from '../src/utils/gapExits.js';
@@ -290,7 +291,7 @@ const orderScheduler = createOrderScheduler({
   placeOrder: (args) => kite.placeOrder(args),
   // LIVE gap exits for opted-in 09:15 orders (sent only when armed; sized at 09:14 if asked; then followed at Kite).
   gapExits: {
-    armed: () => gapLive.armed(),
+    status: (date) => gapLive.status(date),
     size: async (o) => {
       const p = await tradingDesk.gapPlanFor(o.symbol, o.side);
       return p?.ok ? { quantity: p.qty, reason: `${p.type} gap ${p.g} ATR, size ×${p.factor}${p.factorReasons.length ? ` (${p.factorReasons.join('; ')})` : ''}` } : null;
@@ -308,13 +309,21 @@ const orderScheduler = createOrderScheduler({
   },
 });
 orderScheduler.load().catch((error) => console.error(`Scheduled orders: ${error.message}`));
-addOrderRoutes(app, orderScheduler, { onSession: (s) => { openingCollector.setSession(s); auctionTracker.setSession(s); gapLive.setSession(s); } });
+// The Kite session handed over by the browser (memory only), also for one-off reads such as a gap plan's ATR.
+let kiteSession = null;
+addOrderRoutes(app, orderScheduler, {
+  onSession: (s) => {
+    kiteSession = s?.accessToken && s?.apiKey ? { apiKey: s.apiKey, accessToken: s.accessToken } : null;
+    openingCollector.setSession(s); auctionTracker.setSession(s); gapLive.setSession(s);
+  },
+});
 
 // Opening window 09:15–09:20 (Kite WebSocket) and the 09:20 decision with paper trading (milestone 2).
 const dataDir = fileURLToPath(new URL('../.data', import.meta.url));
 const readJsonFile = (name) => { try { return JSON.parse(readFileSync(`${dataDir}/${name}`, 'utf8')); } catch { return null; } };
 const tickLog = createTickLog(`${dataDir}/ticks`);
 const instrumentService = createInstrumentService({ store: fsStore(dataDir), kite });
+const historyService = createHistoryService({ store: fsStore(dataDir), kite, calendar });
 // Pre-open auction readings 09:00–09:09 (Kite /quote, read-only) for the Auction layer.
 const auctionTracker = createAuctionTracker({
   store: fsStore(dataDir), kite, instruments: instrumentService, calendar,
@@ -352,23 +361,14 @@ const tradingDesk = createTradingDesk({
   onUpdate: () => broadcastOpening(),
   gapList: gapEntries,
   // A stock outside today's opening universe: its 09:10 pre-open row, with the ATR estimated.
-  gapFallback: async (symbol, side) => {
-    const s = (await preopenStocks())?.stocks.find((x) => x.symbol === symbol);
-    return s ? {
-      symbol, side, prevClose: s.prevClose, open: s.finalPrice, atr: null, upperCircuit: s.upperCircuit ?? null, lowerCircuit: s.lowerCircuit ?? null,
-      prevHigh: s.prevHigh ?? null, prevLow: s.prevLow ?? null,
-      sources: {
-        prevClose: 'NSE pre-open (09:10 import)', open: 'NSE pre-open final price (09:10 import)', atr: 'missing until the opening universe loads: estimated',
-        tick: 'default ₹0.05', circuit: 'NSE price bands', prevHigh: '09:10 analyzer data (Kite\'s daily candle loads with the opening universe)',
-      },
-    } : null;
-  },
+  // A stock outside today's opening universe (e.g. opted in after 09:10): its pre-open row, plus Kite's ATR fetched for it.
+  gapFallback: createGapFallback({ preopenStocks, instruments: instrumentService, history: historyService, session: () => kiteSession }),
 });
 const openingCollector = createOpeningCollector({
   store: fsStore(dataDir),
   kite,
   instruments: instrumentService,
-  history: createHistoryService({ store: fsStore(dataDir), kite, calendar }),
+  history: historyService,
   calendar,
   tickLog,
   // The 9:15 gap-entry stocks are always watched, whatever their gap or conviction.

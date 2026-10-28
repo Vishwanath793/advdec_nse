@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { istInstant } from '../src/core/calendar.js';
 import { KiteError } from '../src/core/kite.js';
 import { createGapLiveExits } from '../src/core/gapLiveExits.js';
+import { createGapFallback } from '../src/core/gapInputs.js';
 import { createOrderScheduler, validateScheduledOrder } from '../src/core/orderScheduler.js';
 import { gapExitPlan } from '../src/utils/gapExits.js';
 import { readCalendar } from './tv/calendar.js';
@@ -278,7 +279,7 @@ test('scheduler: the opt-in needs a 09:15 MARKET MIS NSE order, and gets a finda
   assert.equal(validateScheduledOrder(input({ exits: undefined }), NOW, cal).order.exits, undefined, 'off by default');
 });
 
-function scheduler({ armed = true, size = async () => ({ quantity: 12, reason: 'normal gap ×1' }) } = {}) {
+function scheduler({ armed = true, enabled = true, size = async () => ({ quantity: 12, reason: 'normal gap ×1' }) } = {}) {
   const files = new Map();
   const placed = [];
   const handed = [];
@@ -288,7 +289,7 @@ function scheduler({ armed = true, size = async () => ({ quantity: 12, reason: '
     placeOrder: async () => assert.fail('the sender stub sends'),
     sender: { send: async ({ order }) => { placed.push(order); return { ok: true, orderId: 'K1', sentAt: c.t, confirmedAt: c.t, attempts: 1 }; } },
     calendar: cal, now: () => new Date(c.t), setTimer: () => 0, clearTimer: () => {},
-    gapExits: { armed: () => armed, size, onPlaced: (o) => handed.push(o.id) },
+    gapExits: { status: () => ({ enabled, armed }), size, onPlaced: (o) => handed.push(o.id) },
   });
   sch.setSession({ apiKey: 'k', accessToken: 't' });
   return { sch, placed, handed, c };
@@ -301,7 +302,7 @@ test('scheduler: an opted-in order is not sent unless live exits are armed that 
   await sch.fire(order.id);
   const o = (await sch.list()).find((x) => x.id === order.id);
   assert.equal(o.status, 'failed');
-  assert.match(o.result.error, /not armed today/);
+  assert.match(o.result.error, /Not sent: live gap exits were switched on but not armed for 2026-10-28/);
   assert.equal(placed.length, 0, 'nothing reached Kite');
 });
 
@@ -334,4 +335,54 @@ test('scheduler: without live exits (the phone) the opt-in is refused; plain ord
   const { order } = await sch.add(input({ exits: undefined }));
   assert.equal(order.exits, undefined);
   assert.equal(order.tag, '');
+});
+
+test('scheduler: each opted-in order gets its own tag (never the shared default tag)', async () => {
+  const { sch } = scheduler();
+  const a = (await sch.add(input({ tag: 'ADVDC' }))).order;
+  const b = (await sch.add(input({ tag: 'ADVDC', quantity: 21 }))).order;
+  assert.equal(a.tag, `L28E${a.id.slice(1)}INFY`);
+  assert.equal(b.tag, `L28E${b.id.slice(1)}INFY`);
+  assert.notEqual(a.tag, b.tag);
+  const plain = (await sch.add(input({ tag: 'ADVDC', exits: undefined, quantity: 22 }))).order;
+  assert.equal(plain.tag, 'ADVDC', 'plain orders keep the default tag');
+});
+
+test('scheduler: a warning when scheduled while not armed for that day; none when armed', async () => {
+  const off = scheduler({ enabled: false, armed: false });
+  assert.ok((await off.sch.add(input())).warnings.some((w) => /switched off in Settings/.test(w)));
+  const on = scheduler({ enabled: true, armed: false });
+  assert.ok((await on.sch.add(input())).warnings.some((w) => /not armed for 2026-10-28: type the confirmation/.test(w)));
+  const armed = scheduler({ enabled: true, armed: true });
+  assert.ok(!(await armed.sch.add(input())).warnings.some((w) => /not armed|switched off/.test(w)));
+});
+
+test('live tags: two positions in the same stock on one day never share a tag', async () => {
+  const s = setup();
+  s.kite.rows.push(entryRow(10, 1012.5), { ...entryRow(10, 1013), order_id: 'E2', tag: 'L28E13X' });
+  await s.live.track({ ...scheduled, id: 'S12' });
+  await s.live.track({ ...scheduled, id: 'S13', tag: 'L28E13X', result: { orderId: 'E2' } });
+  await s.live.syncNow();
+  await s.live.idle();
+  const tags = s.kite.rows.filter((r) => r.order_type === 'SL-M').map((r) => r.tag);
+  assert.deepEqual(tags, ['L28S1201X', 'L28S1301X']);
+});
+
+test('a stock opted in after 09:10: Kite ATR, previous-day levels, tick and lot fetched for it', async () => {
+  const preopenStocks = async () => ({ stocks: [{ symbol: 'SAIL', prevClose: 120, finalPrice: 122.5, upperCircuit: 132, lowerCircuit: 108 }] });
+  const instruments = { load: async () => ({ equity: (s) => (s === 'SAIL' ? { token: 758529, tick: 0.01, lot: 1 } : null) }) };
+  let asked = null;
+  const history = { load: async (items) => { asked = items; return { history: { SAIL: { atr14: 3.4, prevDay: { date: '2026-10-27', high: 121.8, low: 118.9 } } }, errors: [] }; } };
+  const withKite = createGapFallback({ preopenStocks, instruments, history, session: () => ({ apiKey: 'k', accessToken: 't' }) });
+  const x = await withKite('SAIL', 'SELL');
+  assert.deepEqual(asked, [{ symbol: 'SAIL', token: 758529 }]);
+  assert.deepEqual([x.atr, x.tick, x.prevHigh, x.prevLow], [3.4, 0.01, 121.8, 118.9]);
+  assert.equal(x.sources.atr, 'ATR(14) from Kite daily candles (fetched for this stock)');
+  const plan = gapExitPlan(x, {}, RISK);
+  assert.equal(plan.atrEstimated, false, 'no ×0.5 for an estimated ATR');
+  // No Kite session: the estimate, saying why.
+  const noKite = await createGapFallback({ preopenStocks, instruments, history, session: () => null })('SAIL', 'SELL');
+  assert.equal(noKite.atr, null);
+  assert.equal(noKite.sources.atr, 'missing (no Kite session): estimated');
+  assert.equal(await withKite('NOPE', 'BUY'), null);
 });

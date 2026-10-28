@@ -107,8 +107,9 @@ export function validateScheduledOrder(input, now, calendar) {
       triggerAt: triggerAt.toISOString(),
       marketProtection: Number.isFinite(marketProtection) ? marketProtection : -1,
       autoslice: input?.autoslice !== false,
-      // An opted-in order always has a tag, so it can be found in Kite's order book after an unknown outcome.
-      tag: exits && !userTag ? liveTag(day, symbol, 'entry', 1) : userTag,
+      // An opted-in order gets its own tag (made unique with its order number when it is added), never the
+      // shared default tag, so it can be found in Kite's order book after an unknown outcome.
+      tag: exits ? liveTag(day, symbol, 'entry', 1) : userTag,
       note: typeof input?.note === 'string' ? input.note.slice(0, 200) : '',
       ...(exits ? { exits, gapAutoSize: input?.gapAutoSize === true } : {}),
     },
@@ -250,7 +251,7 @@ export function createOrderScheduler({
   setTimer = setTimeout, clearTimer = clearTimeout, sender = null, orderDetails = null,
   // Network time minus this PC's clock, in ms (server/networkClock.js). Orders are timed on network time.
   clockOffsetMs = () => 0, clockStatus = () => null,
-  // LIVE gap exits (PC backend only): { armed(date), size(order) → { quantity, plan, reason }, onPlaced(order) }.
+  // LIVE gap exits (PC backend only): { status(date) → { enabled, armed }, size(order) → { quantity, plan, reason }, onPlaced(order) }.
   gapExits = null,
 }) {
   /** Network time as a Date: the scheduler's clock (every trigger, check and timestamp uses it). */
@@ -331,8 +332,10 @@ export function createOrderScheduler({
       return o;
     }
     // An opted-in order goes only with its live exits armed: never a live entry without them.
-    if (o.exits === 'gap' && !gapExits?.armed?.(indiaDate(due))) {
-      await update(o, { status: 'failed', result: { error: 'Not sent: live gap exits are not armed today (Settings: the switch and today\'s typed confirmation). Nothing reached Kite.' } });
+    const live = o.exits === 'gap' ? gapExits?.status?.(indiaDate(due)) : null;
+    if (o.exits === 'gap' && !live?.armed) {
+      const why = live?.enabled ? `live gap exits were switched on but not armed for ${indiaDate(due)} (the typed confirmation on the Orders page)` : 'live gap exits are switched off in Settings';
+      await update(o, { status: 'failed', result: { error: `Not sent: ${why}. Nothing reached Kite.` } });
       return o;
     }
     if (o.gapAutoSize && !o.sizing) await sizeNow(o.id).catch(() => {});
@@ -436,6 +439,16 @@ export function createOrderScheduler({
         && o.quantity === order.quantity && o.triggerAt === order.triggerAt && o.orderType === order.orderType && o.price === order.price);
       if (duplicate) throw new Error(`The same order is already scheduled (${duplicate.id}).`);
       const o = { id: `S${nextId++}`, ...order, createdAt: netNow().toISOString(), status: 'scheduled', result: null };
+      if (o.exits) {
+        const day = indiaDate(new Date(o.triggerAt));
+        o.tag = liveTag(day, o.symbol, 'entry', Number(o.id.slice(1)));
+        const live = gapExits.status?.(day);
+        if (!live?.armed) {
+          warnings.push(live?.enabled
+            ? `Live gap exits are not armed for ${day}: type the confirmation on the Orders page (9:15 gap entry card) before 09:15 that day, or this order will not be sent.`
+            : 'Live gap exits are switched off in Settings: turn them on, then arm them on the Orders page before 09:15, or this order will not be sent.');
+        }
+      }
       orders.push(o);
       await save();
       arm(o);

@@ -40,6 +40,36 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-28: Live gap exits: unique tags, not-armed warnings, Kite ATR for late opted-in stocks (Claude Code for vinayakb374, android-app, local commit)
+**Why:** The 09:15 SELL 500 SAIL with live gap exits (S12, scheduled at 09:12) was not sent. The switch was on, but
+today wasn't armed. Three problems showed:
+- its entry tag was the shared default `ADVDC`;
+- nothing warned that it wouldn't be sent;
+- SAIL was added after the 09:10 preparation, so its ATR was estimated (×0.5 size), and auto-size gave 38 shares.
+
+**What changed:**
+- **Tags:**
+  - An opted-in order's entry tag is `L<dd>E<order number><SYMBOL>`, never the default tag.
+  - The live exits' tags start at the order number × 100 + 1 (e.g. `L28S1201SAIL`), so two positions in one stock
+    on one day never share a tag.
+- **Warnings:**
+  - `add()` warns when the order's day isn't armed, or when the switch is off.
+  - The pending row and the order form show the same warning in red.
+  - A refused send now says which: switch off, or on but not armed for that date.
+- **Late stocks:** a stock outside the opening universe now gets Kite's ATR(14), previous-day high/low, tick and lot,
+  fetched for it (`src/core/gapInputs.js`, using the shared history service and the handed-over session). Without a
+  session it is still an estimate, labelled with why. The plan's "from" says "pre-open row + Kite ATR".
+
+**Files:** new `src/core/gapInputs.js`; `src/core/orderScheduler.js`, `src/core/gapLiveExits.js`, `src/utils/gapLive.js`,
+`src/core/tradingDesk.js`, `server/index.js`, `src/OrdersPage.jsx`, `server/gapLive.test.js`.
+
+**Tests / checks:** npm test (321 pass, 4 new), npm run build, npx cap sync android.
+
+**Not verified:**
+- **Not checked in the browser, and the backend was not restarted.** At 09:52 IST, during market hours, a backend
+  (PID 48736, not started by this session) was running on :3002. It still runs the old code until restarted.
+- Fetching Kite history for one late stock hasn't run against Kite.
+
 ### 2026-10-27: 9:15 gap entry phase 2: LIVE gap exits for opted-in scheduled 09:15 orders; phase-1 gaps closed (Claude Code for vinayakb374, android-app, local commits)
 **Go-ahead:** asked in chat ("Should I build phase 2 now?"), and the owner chose "Yes, build phase 2 now". The
 phase-1 fixes are in their own commit (70df933).

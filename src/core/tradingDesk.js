@@ -245,7 +245,7 @@ export function createTradingDesk({
       const hit = metas.day?.get(symbol);
       const inputs = hit ? gapInputsFromMeta(hit.m, { symbol, side }) : await gapFallback(symbol, side);
       if (!inputs) return null;
-      return { ...gapExitPlan(inputs, s.gapExits, s.risk), from: hit ? 'opening universe' : 'pre-open row' };
+      return { ...gapExitPlan(inputs, s.gapExits, s.risk), from: hit ? 'opening universe' : inputs.atr ? 'pre-open row + Kite ATR' : 'pre-open row' };
     },
 
     /** The full decision for one stock (factors, strategy checks, plan). */

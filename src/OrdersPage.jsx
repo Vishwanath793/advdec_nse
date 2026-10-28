@@ -93,6 +93,22 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
   const [now, setNow] = useState(() => new Date());
   const [orders, setOrders] = useState([]);
   const [clock, setClock] = useState(null); // network time vs this PC's clock (server/networkClock.js)
+  const [live, setLive] = useState(null); // live gap exits: { enabled, armedFor }
+  useEffect(() => {
+    if (!api.trading?.live) return undefined;
+    let alive = true;
+    const load = () => api.trading.live.state().then((v) => alive && setLive(v)).catch(() => {});
+    load();
+    const t = setInterval(load, 15_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  /** Why an opted-in order won't be sent as things stand (null when it will). */
+  const notArmed = (o) => {
+    if (o.exits !== 'gap' || !live) return null;
+    const day = indiaDate(new Date(o.triggerAt));
+    if (!live.enabled) return 'Live gap exits are switched off in Settings: this order will not be sent.';
+    return live.armedFor === day ? null : `Not armed for ${day}: type the confirmation on the 9:15 gap entry card before 09:15 that day, or this order will not be sent.`;
+  };
   const [scheduler, setScheduler] = useState(null); // { connected, userId }
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -333,6 +349,9 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
                   ? 'Sent only if live gap exits are armed that day (Settings switch + typed confirmation on the Orders card). Real orders; a stop can fill worse than its trigger, or not at all at a circuit.'
                   : 'Only for a Market, MIS order at 09:15:00–09:15:59.'}
               </span>
+              {liveExitsOk && form.exits && live && notArmed({ exits: 'gap', triggerAt: `${form.date}T09:15:00+05:30` }) && (
+                <span className="dec-text">⚠ {notArmed({ exits: 'gap', triggerAt: `${form.date}T09:15:00+05:30` })}</span>
+              )}
             </div>
           )}
         </div>
@@ -357,6 +376,7 @@ export default function OrdersPage({ stocks, settings, session, draft, onDraftUs
                     <span className={o.side === 'BUY' ? 'adv-text' : 'dec-text'}>{o.side}</span> {o.quantity} <span className="mono">{o.symbol}</span>{' '}
                     {o.orderType === 'LIMIT' ? `limit ${rs(o.price)}` : 'market'} · {o.product} <span className="hint">{o.id}</span>
                     {o.exits === 'gap' && <> <span className="badge mode-badge mode-live" title="Real SL-M and targets at Kite after the fill (when armed)">live gap exits</span>{o.gapAutoSize ? <span className="hint"> · auto-size at 09:14</span> : null}</>}
+                    {notArmed(o) && <div className="dec-text">⚠ {notArmed(o)}</div>}
                   </td>
                   <td><span className={`badge ${STATUS_CLASS[o.status]}`}>{o.status === 'placing' ? 'sending…' : 'scheduled'}</span></td>
                   <td>{o.status === 'scheduled' && <button type="button" className="btn danger" onClick={() => cancel(o)}>Cancel</button>}</td>
