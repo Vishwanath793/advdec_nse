@@ -1,4 +1,7 @@
-import { CONFIRMED_SCORE, DEFAULT_SCORE_PRESET, openingRejections, scoreOpening } from './confirmation.js';
+import {
+  cleanOpeningThresholds, CONFIRMED_SCORE, DEFAULT_FACTOR_SETTINGS, DEFAULT_GROUP_WEIGHTS, DEFAULT_OPENING_THRESHOLDS, DEFAULT_SCORE_PRESET, DEFAULT_SCORE_TIERS,
+  MAX_FACTOR_WEIGHT, openingRejections, SCORE_PRESETS, scoreOpening,
+} from './confirmation.js';
 import { cleanRiskSettings, tradeBlockers } from './risk.js';
 import { runStrategies, strategySettings, STRATEGY_LABEL } from './strategies.js';
 import { buildTradePlan } from './tradePlan.js';
@@ -10,13 +13,32 @@ import { buildTradePlan } from './tradePlan.js';
  * The default for every stock is NO TRADE; each one says why.
  */
 
-export const DEFAULT_SCORING_SETTINGS = { preset: DEFAULT_SCORE_PRESET, minScore: CONFIRMED_SCORE };
+export const DEFAULT_SCORING_SETTINGS = {
+  preset: DEFAULT_SCORE_PRESET, minScore: CONFIRMED_SCORE, groupWeights: DEFAULT_GROUP_WEIGHTS,
+  factors: DEFAULT_FACTOR_SETTINGS, tiers: DEFAULT_SCORE_TIERS, thresholds: DEFAULT_OPENING_THRESHOLDS,
+};
 
+const clampNum = (v, d, lo, hi) => {
+  const n = Number(v);
+  return v === '' || v == null || !Number.isFinite(n) ? d : Math.min(hi, Math.max(lo, n));
+};
+
+/** Scoring settings merged over the defaults: preset, minimum score, group and factor weights, tiers, thresholds. */
 export function cleanScoringSettings(input = {}) {
-  const min = Number(input?.minScore);
+  const tiers = Object.fromEntries(Object.entries(DEFAULT_SCORE_TIERS).map(([k, d]) => [k, clampNum(input?.tiers?.[k], d, 0, 100)]));
+  // Keep the tiers in order: strong ≥ watchlist ≥ weak.
+  tiers.watchlist = Math.min(tiers.watchlist, tiers.strong);
+  tiers.weak = Math.min(tiers.weak, tiers.watchlist);
   return {
-    preset: input?.preset === 'research' ? 'research' : 'unit',
-    minScore: Number.isFinite(min) ? Math.min(100, Math.max(0, min)) : CONFIRMED_SCORE,
+    preset: SCORE_PRESETS[input?.preset] ? input.preset : 'unit',
+    minScore: clampNum(input?.minScore, CONFIRMED_SCORE, 0, 100),
+    groupWeights: Object.fromEntries(Object.entries(DEFAULT_GROUP_WEIGHTS).map(([k, d]) => [k, clampNum(input?.groupWeights?.[k], d, 0, 100)])),
+    factors: Object.fromEntries(Object.entries(DEFAULT_FACTOR_SETTINGS).map(([k, d]) => [k, {
+      on: typeof input?.factors?.[k]?.on === 'boolean' ? input.factors[k].on : d.on,
+      weight: clampNum(input?.factors?.[k]?.weight, d.weight, 0, MAX_FACTOR_WEIGHT),
+    }])),
+    tiers,
+    thresholds: cleanOpeningThresholds(input?.thresholds),
   };
 }
 
@@ -25,7 +47,10 @@ const NO_DAY = { killSwitch: false, realised: 0, trades: 0, open: 0, consecutive
 /** One stock: the best plan among its passing strategies, or why there's none. */
 export function evaluateStock(f, { strategies, risk, scoring, partial = false, availableMargin = null } = {}) {
   const results = runStrategies(f, strategies);
-  const options = (r, plan) => ({ direction: r.direction, strategy: r, plan, preset: scoring.preset, minRewardRisk: risk.minRewardRisk, maxSpreadBps: risk.maxSpreadBps });
+  const options = (r, plan) => ({
+    direction: r.direction, strategy: r, plan, preset: scoring.preset, groupWeights: scoring.groupWeights, factorSettings: scoring.factors,
+    tiers: scoring.tiers, thresholds: scoring.thresholds, minRewardRisk: risk.minRewardRisk, maxSpreadBps: risk.maxSpreadBps,
+  });
   const tried = results.filter((r) => r.pass).map((r) => {
     const plan = buildTradePlan(r.signal, f, risk, { availableMargin });
     return { result: r, plan, score: scoreOpening(f, options(r, plan)) };
@@ -36,7 +61,7 @@ export function evaluateStock(f, { strategies, risk, scoring, partial = false, a
   const nearest = results.filter((r) => r.applies).sort((a, b) => b.checks.filter((c) => c.ok).length / Math.max(1, b.checks.length) - a.checks.filter((c) => c.ok).length / Math.max(1, a.checks.length))[0];
   const direction = best?.result.direction ?? nearest?.direction ?? Math.sign(f.ret5Pct || f.gapPct || 1);
   const score = best?.score ?? scoreOpening(f, options(nearest ?? { direction, checks: [], label: '', pass: false }, null));
-  const rejections = openingRejections(f, { direction, partial });
+  const rejections = openingRejections(f, { direction, partial, minTicks: scoring.thresholds?.minTicks });
 
   const reasons = [];
   if (rejections.length) reasons.push(...rejections);

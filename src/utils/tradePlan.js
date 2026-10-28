@@ -58,8 +58,8 @@ export function buildTradePlan(signal, features, riskSettings, { availableMargin
   const rewardPerShare2 = up ? target2 - expectedEntry : expectedEntry - target2;
   const grossReward = half * rewardPerShare1 + (qty - half) * rewardPerShare2;
   const avgExit = qty ? (half * target1 + (qty - half) * target2) / qty : expectedEntry;
-  const costs = qty ? roundTripCharges({ side: up ? 'BUY' : 'SELL', qty, entry: expectedEntry, exit: avgExit, exitOrders: half ? 2 : 1 }) : { total: 0 };
-  const stopCosts = qty ? roundTripCharges({ side: up ? 'BUY' : 'SELL', qty, entry: expectedEntry, exit: stop }) : { total: 0 };
+  const costs = qty ? roundTripCharges({ side: up ? 'BUY' : 'SELL', qty, entry: expectedEntry, exit: avgExit, exitOrders: half ? 2 : 1 }, s.charges) : { total: 0 };
+  const stopCosts = qty ? roundTripCharges({ side: up ? 'BUY' : 'SELL', qty, entry: expectedEntry, exit: stop }, s.charges) : { total: 0 };
   const netReward = grossReward - costs.total;
   const netRisk = qty * riskPerShare + stopCosts.total;
   const rewardRisk = netRisk > 0 ? netReward / netRisk : null;
@@ -70,7 +70,7 @@ export function buildTradePlan(signal, features, riskSettings, { availableMargin
     trigger, expectedEntry, maxEntry, stop, target1, target2,
     riskPerShare: r2(riskPerShare), qty, firstExitQty: half, riskAmount: r2(netRisk), notional: r2(qty * expectedEntry),
     grossReward: r2(grossReward), costs, netReward: r2(netReward), rewardRisk: rewardRisk != null ? r2(rewardRisk) : null,
-    slippageBps: s.slippageBps, maxSlippageBps: s.maxSlippageBps, tick,
+    slippageBps: s.slippageBps, maxSlippageBps: s.maxSlippageBps, tick, chargeRates: s.charges,
     ok: reasons.length === 0, reasons,
   };
 }

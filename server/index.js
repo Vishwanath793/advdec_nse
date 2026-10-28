@@ -22,7 +22,7 @@ import { createOrderScheduler } from '../src/core/orderScheduler.js';
 import { createThreadSender } from './orderSender.js';
 import { createNetworkClock } from './networkClock.js';
 import { createNseLiveService } from '../src/core/nseLive.js';
-import { createOpeningCollector } from '../src/core/openingCollector.js';
+import { createOpeningCollector, DEFAULT_COLLECTOR_SETTINGS } from '../src/core/openingCollector.js';
 import { createInstrumentService } from '../src/core/instruments.js';
 import { createHistoryService } from '../src/core/kiteHistory.js';
 import { createAuctionTracker } from '../src/core/auctionTracker.js';
@@ -413,10 +413,15 @@ addOpeningRoutes(app, openingCollector, {
   getLatest: () => withTrading(openingLatest),
   subscribe: (send) => { openingSubscribers.add(send); return () => openingSubscribers.delete(send); },
 });
+// The opening universe: the minimum 09:10 gap, the watchlist and whether to add each stock's future.
+app.get('/api/opening/settings', (_req, res) => res.json({ ...DEFAULT_COLLECTOR_SETTINGS, ...(readJsonFile('opening-settings.json') ?? {}) }));
 app.put('/api/opening/settings', (req, res) => {
   const minGapPct = Number(req.body?.minGapPct);
   const watchlist = Array.isArray(req.body?.watchlist) ? req.body.watchlist.map((x) => String(x).trim().toUpperCase()).filter((x) => /^[A-Z0-9&_-]{1,25}$/.test(x)).slice(0, 200) : [];
-  const saved = { minGapPct: Number.isFinite(minGapPct) && minGapPct >= 0 && minGapPct <= 20 ? minGapPct : 0.5, watchlist };
+  const saved = {
+    minGapPct: Number.isFinite(minGapPct) && minGapPct >= 0 && minGapPct <= 20 ? minGapPct : DEFAULT_COLLECTOR_SETTINGS.minGapPct, watchlist,
+    includeFutures: typeof req.body?.includeFutures === 'boolean' ? req.body.includeFutures : DEFAULT_COLLECTOR_SETTINGS.includeFutures,
+  };
   writeFileSync(`${dataDir}/opening-settings.json`, JSON.stringify(saved, null, 2));
   res.json(saved);
 });

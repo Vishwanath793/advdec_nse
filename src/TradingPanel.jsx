@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
 import { api } from './platform/index.js';
+import { MAX_FACTOR_WEIGHT, OPENING_FACTORS, OPENING_GROUPS } from './utils/confirmation.js';
+import { DEFAULT_SCORING_SETTINGS } from './utils/decision.js';
+import { DEFAULT_RISK_SETTINGS } from './utils/risk.js';
+import { DEFAULT_STRATEGY_SETTINGS } from './utils/strategies.js';
 
 /**
  * The 09:20 trading UI (milestone 2: PAPER only).
  *   ModeBadge        BACKTEST / PAPER / LIVE, on every page
  *   TradingPanel     capital, mode, positions, pending entries, P&L, the day's trades, daily-loss bar, kill switch
- *   TradingSettings  risk limits, strategy thresholds, the score preset (Settings page)
+ *   TradingSettings  risk limits, charges, every strategy threshold, score weights per factor and group,
+ *                    tiers, the factors' pass/warn lines, the opening universe (Settings page)
  */
 
 const rs = (n) => (n == null || !Number.isFinite(n) ? '—' : `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
@@ -173,10 +178,123 @@ export function TradingPanel() {
 }
 
 const STRATEGY_FIELDS = {
-  orb: [['minRvol', 'Min RVOL'], ['minClosePos', 'Min close position (0–1)'], ['minRangeAtr', 'Min range × ATR'], ['maxRangeAtr', 'Max range × ATR'], ['maxSpreadBps', 'Max spread (bps)'], ['target1R', 'Target 1 (R)'], ['target2R', 'Target 2 (R)']],
-  gapPullback: [['minGapPct', 'Min gap %'], ['minPullbackPct', 'Min pullback %'], ['maxGapRetracePct', 'Max gap given back %'], ['minRecovery', 'Min recovery (0–1)'], ['minRecoveryVolumeRatio', 'Recovery vs pullback volume'], ['maxStopPct', 'Max stop %']],
-  momentum: [['minRvol', 'Min RVOL'], ['minConsistentMinutes', 'Min consistent minutes'], ['maxVwapDistPct', 'Max distance from VWAP %'], ['maxRet5Pct', 'Max 5-min move %'], ['maxSpreadBps', 'Max spread (bps)'], ['target1R', 'Target 1 (R)'], ['target2R', 'Target 2 (R)']],
+  orb: [
+    ['minRvol', 'Min RVOL'], ['minClosePos', 'Min close position (0–1)'], ['minRangeAtr', 'Min range × ATR'], ['maxRangeAtr', 'Max range × ATR'],
+    ['wideRangeAtr', 'Wide range × ATR (stop at the midpoint)'], ['sectorTolerancePct', 'Sector may be against by (%)'], ['maxSpreadBps', 'Max spread (bps)'],
+    ['target1R', 'Target 1 (R)'], ['target2R', 'Target 2 (R)'],
+  ],
+  gapPullback: [
+    ['minGapPct', 'Min gap %'], ['minPullbackPct', 'Min pullback %'], ['maxGapRetracePct', 'Max gap given back %'], ['minRecovery', 'Min recovery (0–1)'],
+    ['minRecoveryVolumeRatio', 'Recovery vs pullback volume'], ['minImbalance', 'Min book imbalance'], ['maxStopPct', 'Max stop %'], ['maxSpreadBps', 'Max spread (bps)'],
+  ],
+  momentum: [
+    ['minRvol', 'Min RVOL'], ['minConsistentMinutes', 'Min consistent minutes'], ['minClosePos', 'Min close position (0–1)'], ['maxOppositeWickPct', 'Max rejection wick %'],
+    ['maxVwapDistPct', 'Max distance from VWAP %'], ['maxRet5Pct', 'Max 5-min move %'], ['maxRangeAtr', 'Max range × ATR'], ['minStability', 'Min book stability (0–1)'],
+    ['minImbalance', 'Min book imbalance'], ['minStopAtr', 'Min stop × ATR'], ['maxSpreadBps', 'Max spread (bps)'], ['target1R', 'Target 1 (R)'], ['target2R', 'Target 2 (R)'],
+  ],
 };
+const THRESHOLD_FIELDS = [
+  ['holdOpenFlatPct', 'Holding the open: flat within ±%'], ['closePosGood', 'Close position: pass at (0–1)'], ['closePosOk', 'Close position: warn at (0–1)'],
+  ['maxWickPct', 'Candle: max rejection wick %'], ['consistentGood', 'Consistent minutes: pass at'], ['consistentOk', 'Consistent minutes: warn at'],
+  ['setupWarnRatio', 'Strategy checks: warn at share passing'], ['minRangeAtr', 'Range: min × ATR'], ['maxRangeAtr', 'Range: max × ATR'],
+  ['gapHeldMinPct', 'Gap-not-filled factor from gap %'], ['rvolGood', 'RVOL: pass at'], ['rvolOk', 'RVOL: warn at'],
+  ['volAccelGood', 'Volume building: pass at'], ['volAccelOk', 'Volume building: warn at'], ['imbalanceGood', 'Imbalance: pass at'], ['imbalanceOk', 'Imbalance: warn at'],
+  ['spreadGoodBps', 'Spread: pass up to (bps)'], ['stabilityGood', 'Book stability: pass at'], ['stabilityOk', 'Book stability: warn at'],
+  ['liquidityDropWarnPct', 'Liquidity: pass above change %'], ['liquidityDropFailPct', 'Liquidity: warn above change %'],
+  ['impactGoodBps', 'Impact cost: pass up to (bps)'], ['impactOkBps', 'Impact cost: warn up to (bps)'],
+  ['indexMovePct', 'Nifty/sector: flat within ±%'], ['relStrengthPct', 'Relative strength: flat within ±%'], ['minCircuitRoomPct', 'Min room to the circuit %'],
+  ['minTicks', 'Min ticks in the window (else rejected)'],
+];
+const CHARGE_FIELDS = [
+  ['brokeragePct', 'Brokerage %'], ['brokerageCapPerOrder', 'Brokerage cap per order (₹)'], ['sttSellPct', 'STT on sells %'], ['exchangePct', 'NSE transaction %'],
+  ['sebiPerCrore', 'SEBI per crore (₹)'], ['stampBuyPct', 'Stamp duty on buys %'], ['gstPct', 'GST %'],
+];
+const TIER_FIELDS = [['strong', 'Strong from'], ['watchlist', 'Watchlist from'], ['weak', 'Weak from']];
+
+/** The opening universe (collector): minimum 09:10 gap, watchlist, futures. Saved separately; applies from the next preparation. */
+function UniverseSettings() {
+  const [u, setU] = useState(null);
+  const [msg, setMsg] = useState(null);
+  useEffect(() => { api.opening?.settings?.().then((v) => setU({ ...v, watchlistText: (v.watchlist ?? []).join(', ') })).catch((e) => setMsg(e.message)); }, []);
+  if (!api.opening?.settings) return null;
+  if (!u) return msg ? <p className="hint">{msg}</p> : null;
+  const save = async () => {
+    try {
+      const v = await api.opening.saveSettings({ minGapPct: u.minGapPct, includeFutures: u.includeFutures, watchlist: u.watchlistText.split(/[\s,]+/).filter(Boolean) });
+      setU({ ...v, watchlistText: v.watchlist.join(', ') });
+      setMsg('Saved. They apply from the next preparation (after the 09:10 import).');
+    } catch (e) { setMsg(e.message); }
+  };
+  return (
+    <>
+      <h4>Opening universe (what the 09:15 collector subscribes to)</h4>
+      <div className="trading-grid">
+        <label className="field-inline">Min 09:10 gap %<input type="number" step="any" value={u.minGapPct} onChange={(e) => setU({ ...u, minGapPct: e.target.value })} /></label>
+        <label className="field-inline">Watchlist (always included)<input type="text" value={u.watchlistText} placeholder="INFY, TCS" onChange={(e) => setU({ ...u, watchlistText: e.target.value })} /></label>
+        <label className="field-inline"><input type="checkbox" checked={u.includeFutures} onChange={(e) => setU({ ...u, includeFutures: e.target.checked })} /> Add each F&amp;O stock&apos;s near-month future</label>
+      </div>
+      <button type="button" className="btn" onClick={save}>Save the universe</button>
+      {msg && <p className="hint">{msg}</p>}
+    </>
+  );
+}
+
+/** Score weights per factor and group, tiers and the pass/warn lines (utils/confirmation.js). */
+function ScoreFields({ sc, set }) {
+  const custom = sc.preset === 'custom';
+  const factor = (k, patch) => set({ ...sc, factors: { ...sc.factors, [k]: { ...sc.factors[k], ...patch } } });
+  return (
+    <>
+      <h4>Score</h4>
+      <div className="trading-grid">
+        <label className="field-inline">Weights
+          <select value={sc.preset} onChange={(e) => set({ ...sc, preset: e.target.value })}>
+            <option value="unit">Every factor counts by its own weight (default: all 1)</option>
+            <option value="research">Research groups: price 20, range 20, RVOL 20, depth 15, F&amp;O 10, sector 10, feasibility 5</option>
+            <option value="custom">My own group weights (below)</option>
+          </select>
+        </label>
+        <label className="field-inline">Minimum score to trade<input type="number" value={sc.minScore} onChange={(e) => set({ ...sc, minScore: e.target.value })} /></label>
+        {TIER_FIELDS.map(([k, label]) => (
+          <label key={k} className="field-inline">{`Tier: ${label}`}<input type="number" value={sc.tiers[k]} onChange={(e) => set({ ...sc, tiers: { ...sc.tiers, [k]: e.target.value } })} /></label>
+        ))}
+      </div>
+      <p className="hint">Tiers are labels, not probabilities. A hard rejection (stale data, no book, circuit, 09:10 block) always wins over the score.</p>
+      <details className="score-details">
+        <summary>Group weights{custom ? '' : ' (used with “my own group weights”)'}</summary>
+        <div className="trading-grid">
+          {OPENING_GROUPS.map((g) => (
+            <label key={g.key} className="field-inline">{g.label}<input type="number" step="any" min="0" disabled={!custom} value={sc.groupWeights[g.key]} onChange={(e) => set({ ...sc, groupWeights: { ...sc.groupWeights, [g.key]: e.target.value } })} /></label>
+          ))}
+        </div>
+      </details>
+      <details className="score-details">
+        <summary>Factors: switch off or weight each one (within its group)</summary>
+        <table className="factor-table">
+          <thead><tr><th>Group</th><th>Factor</th><th>On</th><th>Weight (0–{MAX_FACTOR_WEIGHT})</th></tr></thead>
+          <tbody>
+            {OPENING_FACTORS.map((x) => (
+              <tr key={x.key}>
+                <td className="hint">{OPENING_GROUPS.find((g) => g.key === x.group)?.label}</td>
+                <td>{x.label}</td>
+                <td><input type="checkbox" checked={sc.factors[x.key].on} onChange={(e) => factor(x.key, { on: e.target.checked })} aria-label={`${x.label} on`} /></td>
+                <td><input type="number" step="any" min="0" max={MAX_FACTOR_WEIGHT} value={sc.factors[x.key].weight} disabled={!sc.factors[x.key].on} onChange={(e) => factor(x.key, { weight: e.target.value })} aria-label={`${x.label} weight`} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
+      <details className="score-details">
+        <summary>Pass / warn lines for each factor</summary>
+        <div className="trading-grid">
+          {THRESHOLD_FIELDS.map(([k, label]) => (
+            <label key={k} className="field-inline">{label}<input type="number" step="any" value={sc.thresholds[k]} onChange={(e) => set({ ...sc, thresholds: { ...sc.thresholds, [k]: e.target.value } })} /></label>
+          ))}
+        </div>
+      </details>
+    </>
+  );
+}
 const RISK_FIELDS = [
   ['capital', 'Capital (₹)'], ['riskPerTradePct', 'Risk per trade %'], ['dailyLossPct', 'Daily loss limit %'], ['maxOpenPositions', 'Max open positions'],
   ['maxTradesPerDay', 'Max trades a day'], ['minRewardRisk', 'Min reward/risk (after costs)'], ['maxConsecutiveLosses', 'Stop after losses in a row'],
@@ -256,6 +374,11 @@ export function TradingSettings() {
   if (!s) return <section className="settings-card"><h3>09:20 trading (paper)</h3><p className="hint">{msg ?? 'Loading…'}</p></section>;
   const setRisk = (k, v) => setS({ ...s, risk: { ...s.risk, [k]: v } });
   const setStrat = (g, k, v) => setS({ ...s, strategies: { ...s.strategies, [g]: { ...s.strategies[g], [k]: v } } });
+  const setCharge = (k, v) => setS({ ...s, risk: { ...s.risk, charges: { ...s.risk.charges, [k]: v } } });
+  const restore = () => {
+    if (!window.confirm('Put the risk, charges, score and strategy settings back to their defaults? (Not saved until you press Save.)')) return;
+    setS({ ...s, risk: DEFAULT_RISK_SETTINGS, scoring: DEFAULT_SCORING_SETTINGS, strategies: DEFAULT_STRATEGY_SETTINGS });
+  };
   const save = async () => {
     try { const saved = await api.trading.saveSettings(s); setS(saved); setMsg('Saved. They apply from the next decision.'); } catch (e) { setMsg(e.message); }
   };
@@ -279,17 +402,17 @@ export function TradingSettings() {
         <label className="field-inline">Entries cancelled after (IST)<input type="time" value={s.risk.entryUntil} onChange={(e) => setRisk('entryUntil', e.target.value)} /></label>
         <label className="field-inline">Square-off (IST)<input type="time" value={s.risk.squareOffAt} onChange={(e) => setRisk('squareOffAt', e.target.value)} /></label>
       </div>
-      <h4>Score</h4>
-      <div className="trading-grid">
-        <label className="field-inline">Weights
-          <select value={s.scoring.preset} onChange={(e) => setS({ ...s, scoring: { ...s.scoring, preset: e.target.value } })}>
-            <option value="unit">Every factor counts the same (default)</option>
-            <option value="research">Research groups: price 20, range 20, RVOL 20, depth 15, F&amp;O 10, sector 10, feasibility 5</option>
-          </select>
-        </label>
-        <label className="field-inline">Minimum score to trade<input type="number" value={s.scoring.minScore} onChange={(e) => setS({ ...s, scoring: { ...s.scoring, minScore: e.target.value } })} /></label>
-      </div>
-      <p className="hint">Tiers: 85+ strong, 70–84 watchlist, 50–69 weak, below 50 reject. A hard rejection (stale data, no book, circuit, 09:10 block) always wins over the score.</p>
+      <details className="score-details">
+        <summary>Charges (Zerodha intraday equity; checked {s.risk.charges.checked})</summary>
+        <div className="trading-grid">
+          {CHARGE_FIELDS.map(([k, label]) => (
+            <label key={k} className="field-inline">{label}<input type="number" step="any" value={s.risk.charges[k]} onChange={(e) => setCharge(k, e.target.value)} /></label>
+          ))}
+          <label className="field-inline">Checked on<input type="date" value={s.risk.charges.checked} onChange={(e) => setCharge('checked', e.target.value)} /></label>
+        </div>
+        <p className="hint">Source: {s.risk.charges.source}. Update these when Zerodha&apos;s charges page changes; plans, paper fills and backtests use them.</p>
+      </details>
+      <ScoreFields sc={s.scoring} set={(scoring) => setS({ ...s, scoring })} />
       {Object.entries(STRATEGY_FIELDS).map(([g, fields]) => (
         <div key={g}>
           <h4><label><input type="checkbox" checked={s.strategies[g].enabled} onChange={(e) => setStrat(g, 'enabled', e.target.checked)} /> {LABELS[g]}</label></h4>
@@ -305,8 +428,12 @@ export function TradingSettings() {
       ))}
       <p className="hint">Every threshold is a hypothesis to test on recorded days, not a known edge.</p>
       {s.gapExits && <GapExitFields g={s.gapExits} set={(g) => setS({ ...s, gapExits: g })} />}
-      <button type="button" className="btn" onClick={save}>Save trading settings</button>
+      <div className="ai-row">
+        <button type="button" className="btn" onClick={save}>Save trading settings</button>
+        <button type="button" className="btn" onClick={restore}>Restore the defaults</button>
+      </div>
       {msg && <p className="hint">{msg}</p>}
+      <UniverseSettings />
     </section>
   );
 }

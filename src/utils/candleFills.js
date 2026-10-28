@@ -54,7 +54,7 @@ export function simulateCandleDay({ date, decisions, candlesBySymbol, risk = {},
     t.exitAt = m;
     const exitValue = t.exits.reduce((a, x) => a + x.qty * x.price, 0);
     t.gross = r2(t.direction * (exitValue - t.qty * t.entry));
-    t.charges = intradayCharges([{ side: t.side, value: t.qty * t.entry }, ...t.exits.map((x) => ({ side: t.side === 'BUY' ? 'SELL' : 'BUY', value: x.qty * x.price }))]).total;
+    t.charges = intradayCharges([{ side: t.side, value: t.qty * t.entry }, ...t.exits.map((x) => ({ side: t.side === 'BUY' ? 'SELL' : 'BUY', value: x.qty * x.price }))], t.plan.chargeRates ?? s.charges).total;
     t.net = r2(t.gross - t.charges);
     t.r = t.plan.riskAmount > 0 ? t.net / t.plan.riskAmount : null;
     t.outcome = t.exits.map((x) => x.kind).join('+');

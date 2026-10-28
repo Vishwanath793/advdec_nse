@@ -137,14 +137,14 @@ function levelsFor({ d, entry, prevClose, open, atr, tick, upperCircuit, lowerCi
  * Reward/risk after costs for half at T1 and half at T2, the way `buildTradePlan` counts it
  * (utils/tradePlan.js): risk is the stop distance plus the round trip's charges at the stop.
  */
-function rewardRiskOf({ d, entry, sl, t1, t2, qty }) {
+function rewardRiskOf({ d, entry, sl, t1, t2, qty, rates }) {
   if (!(qty > 0) || t2 == null) return null;
   const side = d > 0 ? 'BUY' : 'SELL';
   const half = Math.floor(qty / 2);
   const gross = half * d * (t1 - entry) + (qty - half) * d * (t2 - entry);
   const avgExit = (half * t1 + (qty - half) * t2) / qty;
-  const costs = roundTripCharges({ side, qty, entry, exit: avgExit, exitOrders: half ? 2 : 1 }).total;
-  const stopCosts = roundTripCharges({ side, qty, entry, exit: sl }).total;
+  const costs = roundTripCharges({ side, qty, entry, exit: avgExit, exitOrders: half ? 2 : 1 }, rates).total;
+  const stopCosts = roundTripCharges({ side, qty, entry, exit: sl }, rates).total;
   const risk = qty * d * (entry - sl) + stopCosts;
   return risk > 0 ? r2((gross - costs) / risk) : null;
 }
@@ -198,7 +198,7 @@ export function gapExitPlan(input, settings = {}, riskSettings = {}, { available
     return s.qty;
   };
   // Weak reward/risk only cuts fixed-target plans; trailing plans already carry their gap factor.
-  const rewardRisk = rewardRiskOf({ d, entry, sl: lv.sl, t1: lv.t1, t2: lv.t2, qty: Math.max(sizeAt(factor), lot) });
+  const rewardRisk = rewardRiskOf({ d, entry, sl: lv.sl, t1: lv.t1, t2: lv.t2, qty: Math.max(sizeAt(factor), lot), rates: risk.charges });
   if (rewardRisk != null && rewardRisk < risk.minRewardRisk) { factor *= cfg.weakRrFactor; factorReasons.push(`reward/risk after costs ${fmt(rewardRisk)} is below ${risk.minRewardRisk}: ×${cfg.weakRrFactor}`); }
   if (factor < cfg.minFactor) { factor = cfg.minFactor; factorReasons.push(`floor: ×${cfg.minFactor} of the risk budget`); }
 
@@ -215,7 +215,7 @@ export function gapExitPlan(input, settings = {}, riskSettings = {}, { available
     gapPct: r2((G / prevClose) * 100), g: r2(g), type,
     factor: r2(factor), factorReasons, budgetRs: r2((risk.capital * risk.riskPerTradePct) / 100), riskRs,
     S: lv.S, stopDistance: lv.stopDistance, sl: lv.sl, t1: lv.t1, t2: lv.t2, trailSecondHalf: lv.trailSecondHalf,
-    gapLine: lv.gapLine, room: lv.room, qty, firstExitQty, rewardRisk, notes,
+    gapLine: lv.gapLine, room: lv.room, qty, firstExitQty, rewardRisk, notes, chargeRates: risk.charges,
     sources: input.sources ?? {},
     inputs: {
       symbol: input.symbol ?? null, side, prevClose, open, atr: r2(atr), atrEstimated, tick, lot,
@@ -241,7 +241,7 @@ export function replanAfterFill(plan, fillPrice, settings = {}) {
   return {
     entry: fillPrice, S: lv.S, stopDistance: lv.stopDistance, sl: lv.sl, t1: lv.t1, t2: lv.t2, trailSecondHalf: lv.trailSecondHalf,
     riskRs, plannedRiskRs: plan.riskRs, riskFlag,
-    rewardRisk: rewardRiskOf({ d, entry: fillPrice, sl: lv.sl, t1: lv.t1, t2: lv.t2, qty: plan.qty }),
+    rewardRisk: rewardRiskOf({ d, entry: fillPrice, sl: lv.sl, t1: lv.t1, t2: lv.t2, qty: plan.qty, rates: plan.chargeRates }),
     notes,
   };
 }
@@ -257,9 +257,9 @@ export function ratchetStop(d, stop, candidate, touch) {
 }
 
 /** Breakeven plus the round trip's per-share charges for the remaining quantity, rounded against the trade. */
-export function breakevenStop({ d, avgEntry, qty, tick }) {
+export function breakevenStop({ d, avgEntry, qty, tick, rates }) {
   const side = d > 0 ? 'BUY' : 'SELL';
-  const perShare = qty > 0 ? roundTripCharges({ side, qty, entry: avgEntry, exit: avgEntry }).total / qty : 0;
+  const perShare = qty > 0 ? roundTripCharges({ side, qty, entry: avgEntry, exit: avgEntry }, rates).total / qty : 0;
   return d > 0 ? roundUp(avgEntry + perShare, tick) : roundDown(avgEntry - perShare, tick);
 }
 

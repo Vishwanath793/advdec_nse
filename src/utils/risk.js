@@ -3,6 +3,8 @@
  * apply to LIVE). All values are configurable in Settings; these are defaults.
  * Nothing here promises that a stop fills or that a strategy makes money.
  */
+import { cleanChargeRates, INTRADAY_EQUITY_RATES } from './charges.js';
+
 export const DEFAULT_RISK_SETTINGS = {
   capital: 100_000, // ₹ trading capital
   riskPerTradePct: 0.25, // of capital, risked between entry and stop
@@ -17,6 +19,7 @@ export const DEFAULT_RISK_SETTINGS = {
   maxSpreadBps: 25, // wider live spread: no trade
   squareOffAt: '15:10', // paper positions still open are closed at this time (IST)
   entryUntil: '09:30', // entry orders not triggered by this time (IST) are cancelled
+  charges: INTRADAY_EQUITY_RATES, // Zerodha intraday rates (utils/charges.js), adjustable when they change
 };
 const HHMM = /^(0\d|1[0-5]):[0-5]\d$/;
 
@@ -40,6 +43,7 @@ export function cleanRiskSettings(input = {}) {
     maxSpreadBps: c('maxSpreadBps', 1, 500),
     squareOffAt: HHMM.test(input.squareOffAt ?? '') && input.squareOffAt <= '15:20' ? input.squareOffAt : d.squareOffAt,
     entryUntil: HHMM.test(input.entryUntil ?? '') && input.entryUntil >= '09:20' && input.entryUntil <= '15:00' ? input.entryUntil : d.entryUntil,
+    charges: cleanChargeRates(input.charges),
   };
 }
 

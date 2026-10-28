@@ -240,7 +240,7 @@ function DecisionDetail({ x }) {
           <tbody>
             {x.factors.map((f) => (
               <tr key={f.key}>
-                <td>{f.result ? RESULT_MARK[f.result] : '–'}</td><td>{f.label}</td><td>{f.result == null ? `not scored: ${f.detail}` : f.detail}</td><td className="hint">{f.source}</td>
+                <td>{f.result ? RESULT_MARK[f.result] : '–'}</td><td>{f.label}{f.off ? ' (switched off: not scored)' : f.weight != null && f.weight !== 1 ? ` (weight ${f.weight})` : ''}</td><td>{f.result == null ? `not scored: ${f.detail}` : f.detail}</td><td className="hint">{f.source}</td>
               </tr>
             ))}
           </tbody>

@@ -90,6 +90,7 @@ export function createWebApi() {
       replay: (body) => json(post('/api/opening/replay', body)),
       /** Read-only Kite setup check: instruments, historical, quote, WebSocket. */
       selfTest: () => json(fetch('/api/opening/selftest', { method: 'POST' })),
+      settings: () => json(fetch('/api/opening/settings')),
       saveSettings: (body) => json(post('/api/opening/settings', body, 'PUT')),
     },
     /** The 09:20 decision and paper trading (milestone 2: PAPER only; LIVE is not available). */

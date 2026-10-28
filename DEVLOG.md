@@ -22,7 +22,7 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 | Who (name / account) | Branch | What | Started | Files / areas touched |
 |---|---|---|---|---|
-| Vishwanath793 with Claude Code (DELL) — **paused** | android-app | Milestone 3 part 2: Kite historical candle download + cache, server routes, Research section on the Report card page with Excel export. Uncommitted in the shared folder: `src/core/backtestData.js` (planner + candle cache, loads) and `server/backtestData.test.js` (cut off, not in the test script) | 2026-10-19 | new src/core/backtestData.js, server/researchRoutes.js, src/ResearchPanel.jsx; src/ReportCardPage.jsx, src/platform/web.js, server/index.js; tests |
+| Claude Code for vinayakb374 (DELL), taken over from Vishwanath793's paused line with the owner's OK | android-app | Phase 1: every 09:20 factor adjustable (strategies, score weights per factor, tiers, scoring curves, universe, execution window, charges). Phase 2: milestone 3 part 2 (historical candle download + cache, research routes, Research section on the Report card, Excel export). Phase 3: strategy D, the 3-minute break and hold from docs/plan-920-volume-breakout-confirmation.md (PAPER). Stops before LIVE. | 2026-10-28 | src/utils/strategies.js, confirmation.js, decision.js, risk.js, charges.js; src/core/tradingDesk.js, openingCollector.js, backtestData.js; server/researchRoutes.js, tradingRoutes.js, index.js; src/TradingPanel.jsx, ReportCardPage.jsx, new ResearchPanel.jsx; src/platform/web.js; tests |
 ---
 
 ## Entry template
@@ -39,6 +39,31 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 ---
 
 ## Entries (newest first)
+
+### 2026-10-28: 09:20 system phase 1: every factor adjustable (Claude Code for vinayakb374, android-app, local commit)
+**What changed:** nothing in the 09:20 score, strategies, charges or universe is fixed in code any more; the
+defaults are the old constants, so results are unchanged until you change a setting (a test checks this).
+- **Score** (`confirmation.js`, `decision.js`): every factor has an on/off switch and a weight (0–10) within its
+  group; a third preset, *custom*, takes your own group weights; the tiers (strong/watchlist/weak) and every
+  factor's pass/warn line (`DEFAULT_OPENING_THRESHOLDS`, 27 values incl. the minimum ticks) are settings. A factor
+  switched off still shows its reading in the candidate detail, marked "switched off: not scored".
+- **Strategies:** all thresholds now in Settings (11 were hidden: ORB wide range and sector tolerance, B's imbalance
+  and spread, C's close position, wick, range, stability, imbalance and minimum stop).
+- **Charges** (`charges.js` `cleanChargeRates`, inside the risk settings): the Zerodha rates are editable with their
+  checked date; the trade plan carries them to the paper order and position, so plans, paper fills, the gap entry
+  and candle backtests use the same rates.
+- **Opening universe:** `GET /api/opening/settings` added and the save keeps `includeFutures`; Settings has the
+  minimum gap, watchlist and futures switch.
+- Settings page: *Restore the defaults* button.
+**Files:** src/utils/confirmation.js, decision.js, charges.js, risk.js, tradePlan.js, paperLedger.js, candleFills.js,
+gapExits.js; src/TradingPanel.jsx, OpeningScanner.jsx, styles.css, platform/web.js; server/index.js; new
+server/adjustableFactors.test.js (8 tests, in the test script).
+**Tests / checks:** npm test (330 pass), npm run build, npx cap sync android. Browser on :3002 (backend task
+restarted, no pending orders): the Settings card shows every section (170 inputs); the state API returns the new
+scoring fields and charges.
+**Not verified:** saving from the browser (covered by the cleaning tests, not clicked); the LIVE gap exits'
+breakeven still uses the default charge rates (`gapLive.js`).
+**Next:** phase 2 (milestone 3 part 2).
 
 ### 2026-10-28: Backend starts at Windows sign-in on port 3002 for DELL (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** backends started as Claude desktop previews (`preview_start`) are stopped by the app after a while

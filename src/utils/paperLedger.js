@@ -72,7 +72,7 @@ function closePosition(state, p, at) {
   const exitSide = p.direction > 0 ? 'SELL' : 'BUY';
   const exitValue = p.exits.reduce((s, x) => s + x.qty * x.price, 0);
   const gross = p.direction * (exitValue - p.entryValue);
-  const charges = intradayCharges([{ side: entrySide, value: p.entryValue }, ...p.exits.map((x) => ({ side: exitSide, value: x.qty * x.price }))]);
+  const charges = intradayCharges([{ side: entrySide, value: p.entryValue }, ...p.exits.map((x) => ({ side: exitSide, value: x.qty * x.price }))], p.chargeRates);
   p.status = 'CLOSED';
   p.closedAt = at;
   p.gross = r2(gross);
@@ -120,6 +120,7 @@ export function applyEvent(state, e) {
           qty: 0, entryQty: 0, avgEntry: null, entryValue: 0, stop: order.stop, target1: order.target1, target2: order.target2,
           t1Done: false, exits: [], status: 'OPEN', openedAt: e.at,
           ...(order.plan ? { plan: order.plan, levels: null } : {}),
+          ...(order.chargeRates ? { chargeRates: order.chargeRates } : {}),
         };
         state.positions.push(p);
         state.trades += 1;
@@ -204,7 +205,7 @@ export function gapOrderEvents(state, entries, { at, activeFrom, expiresAt, tagP
         id, tag: `${tagPrefix}${symbol}`.replace(/[^A-Za-z0-9]/g, '').slice(0, 20), symbol, token,
         side: plan.side, direction: plan.direction, strategy: GAP_STRATEGY, product: 'MIS', qty: plan.qty, firstExitQty: plan.firstExitQty,
         market: true, immediate: true, activeFrom, trigger: null, maxEntry: null,
-        stop: plan.sl, target1: plan.t1, target2: plan.t2, plan, source, expiresAt,
+        stop: plan.sl, target1: plan.t1, target2: plan.t2, plan, source, expiresAt, ...(plan.chargeRates ? { chargeRates: plan.chargeRates } : {}),
       },
     });
   }
@@ -225,7 +226,7 @@ export function orderEvents(state, decision, { at, entryUntilAt, tagPrefix = 'P9
         id, tag: `${tagPrefix}${d.symbol}`.replace(/[^A-Za-z0-9]/g, '').slice(0, 20), symbol: d.symbol, token: d.token,
         side: p.side, direction: p.direction, strategy: d.strategy, product: 'MIS', qty: p.qty, firstExitQty: p.firstExitQty,
         trigger: p.trigger, maxEntry: p.maxEntry, stop: p.stop, target1: p.target1, target2: p.target2, immediate: p.immediate,
-        score: d.score, expiresAt: entryUntilAt,
+        score: d.score, expiresAt: entryUntilAt, ...(p.chargeRates ? { chargeRates: p.chargeRates } : {}),
       },
     });
   }
@@ -384,7 +385,7 @@ function stepGap(state, p, tick, at, { touch, exitAll, emit, iso, gap }) {
     const half = p.qty > 1 ? Math.floor(p.qty / 2) : p.qty;
     emit(withExc({ type: 'exit', positionId: p.id, qty: half, price: p.target1, kind: 'target1', reason: 'target 1', at: iso }));
     if (p.status === 'OPEN') {
-      const be = breakevenStop({ d, avgEntry: p.avgEntry, qty: p.qty, tick: ptick });
+      const be = breakevenStop({ d, avgEntry: p.avgEntry, qty: p.qty, tick: ptick, rates: p.chargeRates });
       const next = ratchetStop(d, p.stop, be, null);
       if (next !== p.stop) emit({ type: 'stop', positionId: p.id, stop: next, reason: 'breakeven plus costs after target 1', at: iso });
     }

@@ -392,17 +392,73 @@ export const OPENING_GROUPS = [
   { key: 'market', label: 'Sector and benchmark', research: 10 },
   { key: 'feasibility', label: 'Feasibility', research: 5 },
 ];
-export const SCORE_PRESETS = { unit: 'Every factor counts the same', research: 'Research group weights (20/20/20/15/10/10/5)' };
+export const SCORE_PRESETS = {
+  unit: 'Every factor counts the same',
+  research: 'Research group weights (20/20/20/15/10/10/5)',
+  custom: 'Your own group weights',
+};
 export const DEFAULT_SCORE_PRESET = 'unit';
+export const DEFAULT_GROUP_WEIGHTS = Object.fromEntries(OPENING_GROUPS.map((g) => [g.key, g.research]));
 /** Optional reading of a score. Trading needs at least `minScore` (CONFIRMED_SCORE by default). */
+export const DEFAULT_SCORE_TIERS = { strong: 85, watchlist: CONFIRMED_SCORE, weak: 50 };
 export const SCORE_TIERS = [
-  { key: 'strong', label: 'Strong', min: 85 },
-  { key: 'watchlist', label: 'Watchlist', min: CONFIRMED_SCORE },
-  { key: 'weak', label: 'Weak', min: 50 },
+  { key: 'strong', label: 'Strong', min: DEFAULT_SCORE_TIERS.strong },
+  { key: 'watchlist', label: 'Watchlist', min: DEFAULT_SCORE_TIERS.watchlist },
+  { key: 'weak', label: 'Weak', min: DEFAULT_SCORE_TIERS.weak },
   { key: 'reject', label: 'Reject', min: -Infinity },
 ];
-export const scoreTier = (score) => (score == null ? null : SCORE_TIERS.find((t) => score >= t.min).key);
+export const scoreTier = (score, tiers = DEFAULT_SCORE_TIERS) => (score == null ? null
+  : score >= tiers.strong ? 'strong' : score >= tiers.watchlist ? 'watchlist' : score >= tiers.weak ? 'weak' : 'reject');
 export const MIN_OPENING_TICKS = 5;
+
+/**
+ * Where each 09:20 factor's pass/warn/fail line sits. All adjustable in Settings; these
+ * defaults are the original constants (untested hypotheses, like every threshold here).
+ */
+export const DEFAULT_OPENING_THRESHOLDS = {
+  holdOpenFlatPct: 0.05, // within ±this % of the open counts as flat
+  closePosGood: 0.7, closePosOk: 0.4, // close position in the range, in the trade direction (0–1)
+  maxWickPct: 30, // rejection wick, % of the range
+  consistentGood: 4, consistentOk: 3, // minutes of five moving the trade's way
+  setupWarnRatio: 0.7, // share of a strategy's checks passing for a warning instead of a fail
+  minRangeAtr: 0.15, maxRangeAtr: 1.2, // opening range as a multiple of ATR(14)
+  gapHeldMinPct: 0.25, // smallest gap for the "gap not filled" factor
+  rvolGood: 1.5, rvolOk: 1,
+  volAccelGood: 1.1, volAccelOk: 0.8,
+  imbalanceGood: 0.1, imbalanceOk: -0.1, // top-5 book imbalance in the trade direction
+  spreadGoodBps: 10, // up to the risk settings' max spread is a warning
+  stabilityGood: 0.6, stabilityOk: 0.4,
+  liquidityDropWarnPct: -30, liquidityDropFailPct: -60,
+  impactGoodBps: 10, impactOkBps: 25,
+  indexMovePct: INDEX_MOVE_PCT, relStrengthPct: REL_STRENGTH_PCT,
+  minCircuitRoomPct: MIN_CIRCUIT_ROOM_PCT,
+  minTicks: MIN_OPENING_TICKS, // fewer ticks in the window: hard rejection
+};
+const THRESHOLD_RANGE = { consistentGood: [1, 5], consistentOk: [0, 5], minTicks: [1, 1000], setupWarnRatio: [0, 1], closePosGood: [0, 1], closePosOk: [0, 1] };
+
+/** Thresholds merged over the defaults; numbers only, a few clamped to their range. */
+export function cleanOpeningThresholds(input = {}) {
+  return Object.fromEntries(Object.entries(DEFAULT_OPENING_THRESHOLDS).map(([k, d]) => {
+    const n = Number(input?.[k]);
+    if (input?.[k] === '' || input?.[k] == null || !Number.isFinite(n)) return [k, d];
+    const [lo, hi] = THRESHOLD_RANGE[k] ?? [-1e6, 1e6];
+    return [k, Math.min(hi, Math.max(lo, n))];
+  }));
+}
+
+/** Every 09:20 factor (key, group, label), for settings: each can be switched off or weighted. */
+export const OPENING_FACTORS = [
+  ['holdOpen', 'price', 'Holding the open'], ['closePos', 'price', 'Close near the range extreme'], ['candle', 'price', 'Five-minute candle'],
+  ['vwap', 'price', 'Right side of VWAP'], ['consistency', 'price', 'Consistent minutes'],
+  ['setup', 'range', 'Strategy checks'], ['rangeAtr', 'range', 'Range width vs ATR'], ['prevDay', 'range', 'Beyond the previous day high/low'], ['gapHeld', 'range', 'Gap not filled'],
+  ['rvol', 'volume', 'Relative volume'], ['volAccel', 'volume', 'Volume building'],
+  ['imbalance', 'depth', 'Book on the right side'], ['spread', 'depth', 'Spread'], ['stability', 'depth', 'Book stability'], ['liquidityDrop', 'depth', 'Liquidity not draining'], ['impact', 'depth', 'Impact cost'],
+  ['build', 'fo', 'Futures open interest'], ['futAgrees', 'fo', 'Future moving the same way'],
+  ['nifty', 'market', 'Nifty 50 agrees'], ['sector', 'market', 'Sector index agrees'], ['relative', 'market', 'Relative strength vs Nifty'],
+  ['circuitRoom', 'feasibility', 'Room to the circuit'], ['rewardRisk', 'feasibility', 'Reward/risk after costs'], ['fresh', 'feasibility', 'Fresh / complete data'],
+].map(([key, group, label]) => ({ key, group, label }));
+export const MAX_FACTOR_WEIGHT = 10;
+export const DEFAULT_FACTOR_SETTINGS = Object.fromEntries(OPENING_FACTORS.map((x) => [x.key, { on: true, weight: 1 }]));
 
 const SRC = {
   ws: 'Kite WebSocket (full mode), 09:15–09:20',
@@ -421,7 +477,8 @@ const pctTxt = (n) => (n == null || !Number.isFinite(n) ? 'n/a' : `${n.toFixed(2
 const numTxt = (n, d = 2) => (n == null || !Number.isFinite(n) ? 'n/a' : n.toFixed(d));
 
 /** Every factor for one direction. Each is { group, key, label, result (null = unavailable), detail, source }. */
-export function openingFactors(f, { direction, strategy = null, plan = null, minRewardRisk = 1.5, maxSpreadBps = 25 } = {}) {
+export function openingFactors(f, { direction, strategy = null, plan = null, minRewardRisk = 1.5, maxSpreadBps = 25, thresholds = null } = {}) {
+  const t = thresholds ? cleanOpeningThresholds(thresholds) : DEFAULT_OPENING_THRESHOLDS;
   const dir = direction > 0 ? 1 : -1;
   const out = [];
   const add = (group, key, label, result, detail, source) => out.push({ group, key, label, result, detail, source });
@@ -429,47 +486,47 @@ export function openingFactors(f, { direction, strategy = null, plan = null, min
   const side = (v, flat = 0) => (v == null ? null : v > flat ? 'pass' : v >= -flat ? 'neutral' : 'fail');
 
   // Price action
-  add('price', 'holdOpen', 'Holding the open', f.ltp != null && f.open ? side((dir * (f.ltp - f.open) / f.open) * 100, 0.05) : null,
+  add('price', 'holdOpen', 'Holding the open', f.ltp != null && f.open ? side((dir * (f.ltp - f.open) / f.open) * 100, t.holdOpenFlatPct) : null,
     `last ${numTxt(f.ltp)} vs open ${numTxt(f.open)} (${pctTxt(f.ret5Pct)})`, SRC.ohlc);
   const pos = f.closePos == null ? null : dir > 0 ? f.closePos : 1 - f.closePos;
-  add('price', 'closePos', 'Close near the range extreme', band(pos, 0.7, 0.4), pos == null ? 'no range' : `close at ${Math.round(f.closePos * 100)}% of the 09:15–09:20 range`, SRC.ohlc);
+  add('price', 'closePos', 'Close near the range extreme', band(pos, t.closePosGood, t.closePosOk), pos == null ? 'no range' : `close at ${Math.round(f.closePos * 100)}% of the 09:15–09:20 range`, SRC.ohlc);
   const wick = dir > 0 ? f.upperWickPct : f.lowerWickPct;
-  add('price', 'candle', 'Five-minute candle', f.bodyPct == null || wick == null ? null : dir * (f.ltp - f.open) <= 0 ? 'fail' : wick <= 30 ? 'pass' : 'warn',
+  add('price', 'candle', 'Five-minute candle', f.bodyPct == null || wick == null ? null : dir * (f.ltp - f.open) <= 0 ? 'fail' : wick <= t.maxWickPct ? 'pass' : 'warn',
     `body ${pctTxt(f.bodyPct)} of the range, ${dir > 0 ? 'upper' : 'lower'} wick ${pctTxt(wick)}`, SRC.ohlc);
   add('price', 'vwap', `${dir > 0 ? 'Above' : 'Below'} VWAP`, f.vwap ? (dir * (f.ltp - f.vwap) > 0 ? 'pass' : 'fail') : null,
     `${pctTxt(f.vwapDistPct)} from VWAP ${numTxt(f.vwap)}; crossed ${f.vwapCrosses ?? 0} times`, SRC.vwap);
   const mr = (f.minuteReturns ?? []).filter((r) => r != null);
   const same = mr.filter((r) => Math.sign(r) === dir).length;
-  add('price', 'consistency', 'Consistent minutes', mr.length ? (same >= 4 ? 'pass' : same >= 3 ? 'warn' : 'fail') : null, `${same} of ${mr.length} minutes ${dir > 0 ? 'up' : 'down'}`, SRC.candles);
+  add('price', 'consistency', 'Consistent minutes', mr.length ? (same >= t.consistentGood ? 'pass' : same >= t.consistentOk ? 'warn' : 'fail') : null, `${same} of ${mr.length} minutes ${dir > 0 ? 'up' : 'down'}`, SRC.candles);
 
   // Opening-range setup
   if (strategy) {
     const done = strategy.checks.filter((c) => c.ok).length;
     const ratio = strategy.checks.length ? done / strategy.checks.length : 0;
-    add('range', 'setup', `${strategy.label} checks`, strategy.pass ? 'pass' : ratio >= 0.7 ? 'warn' : 'fail', `${done} of ${strategy.checks.length} checks pass`, 'The strategy rules (utils/strategies.js)');
+    add('range', 'setup', `${strategy.label} checks`, strategy.pass ? 'pass' : ratio >= t.setupWarnRatio ? 'warn' : 'fail', `${done} of ${strategy.checks.length} checks pass`, 'The strategy rules (utils/strategies.js)');
   }
-  add('range', 'rangeAtr', 'Range width vs ATR', f.orRangeAtr == null ? null : f.orRangeAtr >= 0.15 && f.orRangeAtr <= 1.2 ? 'pass' : 'fail', `${numTxt(f.orRangeAtr)}× the 14-day ATR`, SRC.hist);
+  add('range', 'rangeAtr', 'Range width vs ATR', f.orRangeAtr == null ? null : f.orRangeAtr >= t.minRangeAtr && f.orRangeAtr <= t.maxRangeAtr ? 'pass' : 'fail', `${numTxt(f.orRangeAtr)}× the 14-day ATR`, SRC.hist);
   const beyond = dir > 0 ? f.distPrevHighPct : f.distPrevLowPct;
   add('range', 'prevDay', `Beyond the previous day ${dir > 0 ? 'high' : 'low'}`, beyond == null ? null : dir * beyond > 0 ? 'pass' : 'neutral',
     `${pctTxt(beyond)} from the previous day ${dir > 0 ? 'high' : 'low'}`, SRC.prev);
-  if (f.gapPct != null && Math.sign(f.gapPct) === dir && Math.abs(f.gapPct) >= 0.25) {
+  if (f.gapPct != null && Math.sign(f.gapPct) === dir && Math.abs(f.gapPct) >= t.gapHeldMinPct) {
     add('range', 'gapHeld', 'Gap not filled', dir * (f.ltp - f.prevClose) > 0 ? 'pass' : 'fail', `gap ${pctTxt(f.gapPct)}, last ${numTxt(f.ltp)} vs previous close ${numTxt(f.prevClose)}`, SRC.prev);
   }
 
   // Relative volume
-  add('volume', 'rvol', 'Relative volume', band(f.rvol, 1.5, 1), f.rvol == null ? 'no historical 09:15–09:20 volume' : `${numTxt(f.rvol)}× the usual opening volume`, SRC.hist);
-  add('volume', 'volAccel', 'Volume building', band(f.volAccel, 1.1, 0.8), `${numTxt(f.volAccel)}× (last two minutes vs the first three)`, SRC.candles);
+  add('volume', 'rvol', 'Relative volume', band(f.rvol, t.rvolGood, t.rvolOk), f.rvol == null ? 'no historical 09:15–09:20 volume' : `${numTxt(f.rvol)}× the usual opening volume`, SRC.hist);
+  add('volume', 'volAccel', 'Volume building', band(f.volAccel, t.volAccelGood, t.volAccelOk), `${numTxt(f.volAccel)}× (last two minutes vs the first three)`, SRC.candles);
 
   // Depth
   const d = f.depth;
-  add('depth', 'imbalance', 'Book on the right side', d ? band(dir * d.imbalance5, 0.1, -0.1) : null, d ? `top-5 imbalance ${numTxt(d.imbalance5)}` : 'no order book', SRC.depth);
-  add('depth', 'spread', 'Spread', d ? (d.spreadBps <= 10 ? 'pass' : d.spreadBps <= maxSpreadBps ? 'warn' : 'fail') : null,
+  add('depth', 'imbalance', 'Book on the right side', d ? band(dir * d.imbalance5, t.imbalanceGood, t.imbalanceOk) : null, d ? `top-5 imbalance ${numTxt(d.imbalance5)}` : 'no order book', SRC.depth);
+  add('depth', 'spread', 'Spread', d ? (d.spreadBps <= t.spreadGoodBps ? 'pass' : d.spreadBps <= maxSpreadBps ? 'warn' : 'fail') : null,
     d ? `${numTxt(d.spreadBps, 1)} bps (mean ${numTxt(d.spreadBpsMean, 1)})` : 'no order book', SRC.depth);
-  add('depth', 'stability', 'Book stability', d ? band(d.stability, 0.6, 0.4) : null, d ? `stability ${numTxt(d.stability)}` : 'no order book', SRC.depth);
-  add('depth', 'liquidityDrop', 'Liquidity not draining', d?.liquidityDropPct == null ? null : d.liquidityDropPct >= -30 ? 'pass' : d.liquidityDropPct >= -60 ? 'warn' : 'fail',
+  add('depth', 'stability', 'Book stability', d ? band(d.stability, t.stabilityGood, t.stabilityOk) : null, d ? `stability ${numTxt(d.stability)}` : 'no order book', SRC.depth);
+  add('depth', 'liquidityDrop', 'Liquidity not draining', d?.liquidityDropPct == null ? null : d.liquidityDropPct >= t.liquidityDropWarnPct ? 'pass' : d.liquidityDropPct >= t.liquidityDropFailPct ? 'warn' : 'fail',
     `top-5 value ${pctTxt(d?.liquidityDropPct)} vs the window median`, SRC.depth);
   const impact = d ? (dir > 0 ? d.impactBuyBps : d.impactSellBps) : null;
-  add('depth', 'impact', 'Impact cost', impact == null ? null : impact <= 10 ? 'pass' : impact <= 25 ? 'warn' : 'fail',
+  add('depth', 'impact', 'Impact cost', impact == null ? null : impact <= t.impactGoodBps ? 'pass' : impact <= t.impactOkBps ? 'warn' : 'fail',
     `${numTxt(impact, 1)} bps to ${dir > 0 ? 'buy' : 'sell'} ₹${(d?.impactNotional ?? 0).toLocaleString('en-IN')}`, SRC.depth);
 
   // F&O (only stocks with a future, and only from real data)
@@ -481,14 +538,14 @@ export function openingFactors(f, { direction, strategy = null, plan = null, min
 
   // Sector and benchmark
   const m = f.market ?? {};
-  add('market', 'nifty', 'Nifty 50 agrees', m.nifty ? side(dir * m.nifty.pct, INDEX_MOVE_PCT) : null, m.nifty ? `Nifty 50 ${pctTxt(m.nifty.pct)} since 09:15` : 'no Nifty ticks', SRC.index);
-  add('market', 'sector', 'Sector index agrees', m.sector ? side(dir * m.sector.pct, INDEX_MOVE_PCT) : null, m.sector ? `${m.sector.symbol} ${pctTxt(m.sector.pct)}` : 'no sector index for this stock', SRC.index);
-  add('market', 'relative', 'Relative strength vs Nifty', m.relVsNiftyPct == null ? null : side(dir * m.relVsNiftyPct, REL_STRENGTH_PCT), `${pctTxt(m.relVsNiftyPct)} vs Nifty`, SRC.index);
+  add('market', 'nifty', 'Nifty 50 agrees', m.nifty ? side(dir * m.nifty.pct, t.indexMovePct) : null, m.nifty ? `Nifty 50 ${pctTxt(m.nifty.pct)} since 09:15` : 'no Nifty ticks', SRC.index);
+  add('market', 'sector', 'Sector index agrees', m.sector ? side(dir * m.sector.pct, t.indexMovePct) : null, m.sector ? `${m.sector.symbol} ${pctTxt(m.sector.pct)}` : 'no sector index for this stock', SRC.index);
+  add('market', 'relative', 'Relative strength vs Nifty', m.relVsNiftyPct == null ? null : side(dir * m.relVsNiftyPct, t.relStrengthPct), `${pctTxt(m.relVsNiftyPct)} vs Nifty`, SRC.index);
 
   // Feasibility
   const limit = dir > 0 ? f.upperCircuit : f.lowerCircuit;
   const room = limit && f.ltp ? (dir * (limit - f.ltp) / f.ltp) * 100 : null;
-  add('feasibility', 'circuitRoom', 'Room to the circuit', room == null ? null : room >= MIN_CIRCUIT_ROOM_PCT ? 'pass' : 'fail', `${pctTxt(room)} to ₹${limit ?? 'n/a'}`, SRC.circuit);
+  add('feasibility', 'circuitRoom', 'Room to the circuit', room == null ? null : room >= t.minCircuitRoomPct ? 'pass' : 'fail', `${pctTxt(room)} to ₹${limit ?? 'n/a'}`, SRC.circuit);
   add('feasibility', 'rewardRisk', 'Reward/risk after costs', plan?.rewardRisk == null ? null : plan.rewardRisk >= minRewardRisk ? 'pass' : 'fail',
     plan ? `${numTxt(plan.rewardRisk)} (min ${minRewardRisk})` : 'no plan', SRC.plan);
   if (f.source === 'candles') {
@@ -504,21 +561,37 @@ export function openingFactors(f, { direction, strategy = null, plan = null, min
 }
 
 /** The 09:20 score for one direction (and strategy, when given): { score, tier, preset, groups, factors, coverage }. */
+// `options`: preset (unit | research | custom), groupWeights (custom), factorSettings
+// ({ key: { on, weight } }; a factor switched off is shown but not scored), tiers, thresholds.
 export function scoreOpening(f, options = {}) {
-  const preset = options.preset === 'research' ? 'research' : 'unit';
-  const factors = openingFactors(f, options);
-  const available = factors.filter((x) => x.result != null);
+  const preset = SCORE_PRESETS[options.preset] ? options.preset : 'unit';
+  const factorCfg = options.factorSettings ?? DEFAULT_FACTOR_SETTINGS;
+  const weightOf = (key) => {
+    const c = factorCfg[key];
+    if (c && c.on === false) return 0;
+    const w = Number(c?.weight ?? 1);
+    return Number.isFinite(w) && w > 0 ? w : 0;
+  };
+  const factors = openingFactors(f, options).map((x) => ({ ...x, weight: weightOf(x.key), off: weightOf(x.key) === 0 }));
+  const scored = factors.filter((x) => !x.off);
+  const available = scored.filter((x) => x.result != null);
+  const groupWeight = (g, own) => (preset === 'research' ? g.research
+    : preset === 'custom' ? Math.max(0, Number(options.groupWeights?.[g.key] ?? g.research) || 0)
+      : own.reduce((s, x) => s + x.weight, 0));
   const groups = OPENING_GROUPS.map((g) => {
     const own = available.filter((x) => x.group === g.key);
-    const score = own.length ? own.reduce((s, x) => s + RESULT_POINTS[x.result], 0) / own.length : null;
-    return { key: g.key, label: g.label, weight: preset === 'research' ? g.research : own.length, factors: own.length, score: score == null ? null : Math.round(score * 100) };
+    const w = own.reduce((s, x) => s + x.weight, 0);
+    const score = w ? own.reduce((s, x) => s + x.weight * RESULT_POINTS[x.result], 0) / w : null;
+    return { key: g.key, label: g.label, weight: groupWeight(g, own), factors: own.length, score: score == null ? null : Math.round(score * 100) };
   });
   const counted = groups.filter((g) => g.score != null && g.weight > 0);
   const total = counted.reduce((s, g) => s + g.weight, 0);
   const score = total ? Math.round(counted.reduce((s, g) => s + g.weight * g.score, 0) / total) : null;
-  const full = preset === 'research' ? OPENING_GROUPS.reduce((s, g) => s + g.research, 0) : factors.length;
-  const coverage = full ? Math.round(((preset === 'research' ? total : available.length) / full) * 100) : 0;
-  return { score, tier: scoreTier(score), preset, groups, factors, coverage };
+  // Coverage: how much of what could have been scored was (missing data is left out, not invented).
+  const full = preset === 'unit' ? scored.reduce((s, x) => s + x.weight, 0)
+    : OPENING_GROUPS.reduce((s, g) => s + (scored.some((x) => x.group === g.key) ? groupWeight(g, []) : 0), 0);
+  const coverage = full ? Math.round(((preset === 'unit' ? available.reduce((s, x) => s + x.weight, 0) : total) / full) * 100) : 0;
+  return { score, tier: scoreTier(score, options.tiers ?? DEFAULT_SCORE_TIERS), preset, groups, factors, coverage };
 }
 
 /**
@@ -526,14 +599,14 @@ export function scoreOpening(f, options = {}) {
  * stale or too little data, no two-sided book, at a circuit limit, a partial
  * window, and the 09:10 tradeability blocks.
  */
-export function openingRejections(f, { direction = 0, partial = false } = {}) {
+export function openingRejections(f, { direction = 0, partial = false, minTicks = MIN_OPENING_TICKS } = {}) {
   const reasons = [];
   if (partial) reasons.push('the window was only partly collected (backend started after 09:15)');
   if (f.source === 'candles') {
     // Candle backtests: all five minutes must have traded; there is no order book to check.
     if (!f.quality || f.quality.candles < 5) reasons.push(`only ${f.quality?.candles ?? 0} of the five 09:15–09:19 candles`);
   } else {
-    if (!f.quality || f.quality.ticks < MIN_OPENING_TICKS) reasons.push(`too few ticks (${f.quality?.ticks ?? 0})`);
+    if (!f.quality || f.quality.ticks < minTicks) reasons.push(`too few ticks (${f.quality?.ticks ?? 0})`);
     if (f.quality?.stale) reasons.push(`stale: last tick ${f.quality.lastTickAgeSec ?? '?'} s before 09:20`);
     if (!f.depth || !(f.depth.bestBid > 0) || !(f.depth.bestAsk > 0)) reasons.push('no live two-sided order book');
   }

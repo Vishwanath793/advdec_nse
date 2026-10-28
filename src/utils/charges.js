@@ -23,11 +23,28 @@ export const INTRADAY_EQUITY_RATES = {
 
 const r2 = (n) => Math.round(n * 100) / 100;
 
+/** Rates merged over INTRADAY_EQUITY_RATES (adjustable in Settings when Zerodha's page changes). */
+export function cleanChargeRates(input = {}) {
+  const d = INTRADAY_EQUITY_RATES;
+  const n = (k, hi) => {
+    const v = Number(input?.[k]);
+    return input?.[k] === '' || input?.[k] == null || !Number.isFinite(v) ? d[k] : Math.min(hi, Math.max(0, v));
+  };
+  return {
+    checked: typeof input?.checked === 'string' && /^d{4}-d{2}-d{2}$/.test(input.checked) ? input.checked : d.checked,
+    source: d.source,
+    brokeragePct: n('brokeragePct', 5), brokerageCapPerOrder: n('brokerageCapPerOrder', 1000), sttSellPct: n('sttSellPct', 5),
+    exchangePct: n('exchangePct', 1), sebiPerCrore: n('sebiPerCrore', 1000), stampBuyPct: n('stampBuyPct', 1), gstPct: n('gstPct', 50),
+    autoSquareOffCharge: n('autoSquareOffCharge', 1000),
+  };
+}
+
 /**
  * Charges for executed orders: `orders` = [{ side: 'BUY'|'SELL', value }]
  * (value = price × quantity of each executed order). Returns the parts and the total (₹).
  */
 export function intradayCharges(orders, rates = INTRADAY_EQUITY_RATES) {
+  rates ??= INTRADAY_EQUITY_RATES;
   let brokerage = 0;
   let stt = 0;
   let exchange = 0;
