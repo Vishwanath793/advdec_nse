@@ -18,7 +18,7 @@ const sgn = (n, d = 2) => (n == null || !Number.isFinite(n) ? '—' : `${n > 0 ?
 const tone = (n) => (n > 0 ? 'adv-text' : n < 0 ? 'dec-text' : '');
 const vol = (n) => (n == null ? '—' : n >= 1e5 ? `${(n / 1e5).toFixed(2)} L` : n.toLocaleString('en-IN'));
 const DECISION_CLASS = { BUY: 'advance', SELL: 'decline', 'NO TRADE': 'unchanged' };
-const STRAT = { orb: 'A · ORB', gapPullback: 'B · Gap pullback', momentum: 'C · Momentum' };
+const STRAT = { orb: 'A · ORB', gapPullback: 'B · Gap pullback', momentum: 'C · Momentum', breakHold: 'D · Break and hold' };
 const RESULT_MARK = { pass: '✓', warn: '~', neutral: '·', fail: '✗' };
 const time = (iso) => (iso ? new Date(iso).toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' }) : '');
 
@@ -189,6 +189,7 @@ export default function OpeningScanner() {
           {data.trading.gapReport.map((g) => `${g.symbol} +${f2(g.gapPct, 1)}%: ${g.verdict}${g.decision && g.decision !== 'NO TRADE' ? ` (${g.decision})` : ''}`).join(' · ')}
         </p>
       )}
+      <BreakHoldTable rows={data?.trading?.decisions ?? []} onPick={setSelected} />
       {selected && detail && <OpeningDetail d={detail} decision={decision} gap={gapLevels(data?.trading?.ledgerState, selected)} onClose={() => setSelected(null)} />}
       <p className="hint">
         Decisions are made once at 09:20 and traded on paper only (simulated fills at the bid/ask plus slippage);
@@ -198,6 +199,65 @@ export default function OpeningScanner() {
         for candles, the order book and F&amp;O.
       </p>
     </section>
+  );
+}
+
+/** Strategy D's line per stock: pattern state and execution kept apart (docs/plan-920-volume-breakout-confirmation.md §11). */
+function BreakHoldTable({ rows, onPick }) {
+  const shown = rows.filter((r) => r.pattern && !['NO_BREAK', 'OFF', null].includes(r.pattern.code));
+  if (!shown.length) return null;
+  return (
+    <details className="score-details" open>
+      <summary>D · 3-minute break and hold: {shown.length} stock(s) with a break, a wait or a data problem{shown.some((r) => r.pattern.shadow) ? ' (shadow mode: shown, not traded)' : ''}</summary>
+      <div className="table-wrap">
+        <table className="research-table">
+          <thead><tr><th>Stock</th><th>State</th><th>Code</th><th>Side</th><th>Level</th><th>09:18 RVOL</th><th>Opening RVOL</th><th>Hold</th><th>Data</th><th>Decision</th><th>Blocker / next event</th></tr></thead>
+          <tbody>
+            {shown.map((r) => {
+              const p = r.pattern;
+              return (
+                <tr key={r.symbol} onClick={() => onPick(r.symbol)} style={{ cursor: 'pointer' }}>
+                  <td className="mono">{r.symbol}</td><td>{p.state}</td><td className="hint">{p.code}</td><td>{p.direction}</td>
+                  <td title={p.reference ?? ''}>{p.level != null ? `${f2(p.level)} (±${f2(p.buffer)})` : '—'}</td>
+                  <td>{f2(p.breakoutRvol)}</td><td>{f2(p.openingRvol)}</td><td>{p.hold ?? '—'}</td>
+                  <td className="hint" title={p.dataMode ?? ''}>{p.label ?? (p.dataMode?.startsWith('sampled') ? 'sampled' : p.dataMode ? 'candles' : '—')}</td>
+                  <td>{p.shadow ? 'shadow' : p.execution}</td><td className="hint">{p.blocker ?? p.nextEvent ?? ''}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="hint">Confirmed means the pattern passed on sampled prices; it isn't a fill, and doesn&apos;t mean the move continues. D ranks by reward/risk to target 1, then 09:18 RVOL (capped at 3), then spread: a selection rule, not a probability.</p>
+    </details>
+  );
+}
+
+/** D's evidence for one stock: the five minutes with volume, the frozen level and buffer, the audit fields. */
+function BreakHoldEvidence({ p }) {
+  const ev = p.evidence ?? {};
+  const m = p.metrics ?? {};
+  const base = ev.volume?.minuteBaseline;
+  return (
+    <details>
+      <summary>D · 3-minute break and hold: {p.state} ({p.code}){p.shadow ? ', shadow mode' : ''}</summary>
+      <p className="hint">
+        Reference {ev.reference?.label ?? '—'}: {f2(m.L3)}–{f2(m.H3)}, frozen at {ev.reference?.frozenAt ?? '09:18'}; buffer ₹{f2(m.b)} ({m.bufferSource});
+        levels {f2(m.longThreshold)} / {f2(m.shortThreshold)}. Data: {ev.dataMode}. Version {ev.strategyVersion}, settings {ev.settingsHash}.
+        {p.nextEvent ? ` Next: ${p.nextEvent}.` : ''}
+      </p>
+      {ev.highVolumeReference && (
+        <table className="research-table">
+          <thead><tr><th>Minute</th><th>High</th><th>Low</th><th>Volume</th><th>RVOL</th><th>09:18 closed beyond</th></tr></thead>
+          <tbody>
+            {ev.highVolumeReference.candles.map((c) => <tr key={c.minute}><td>{c.minute}</td><td>{c.high}</td><td>{c.low}</td><td>{vol(c.volume)}</td><td>{f2(c.rvol)}</td><td>{c.brokenBy0918 ?? '—'}</td></tr>)}
+            {ev.breakout && <tr><td>09:18 (break)</td><td>{ev.breakout.ohlcv[1]}</td><td>{ev.breakout.ohlcv[2]}</td><td>{vol(ev.breakout.ohlcv[4])}{ev.breakout.volumeLowerBound !== ev.breakout.ohlcv[4] ? ` (≥ ${vol(ev.breakout.volumeLowerBound)})` : ''}</td><td>{f2(ev.breakout.minuteRvol)}{base ? ` vs ${vol(base)}` : ''}</td><td>body {f2(ev.breakout.bodyRatio)}, close {f2(ev.breakout.closeLocation)}</td></tr>}
+            {ev.hold && <tr><td>09:19 (hold)</td><td>{ev.hold.ohlcv[1]}</td><td>{ev.hold.ohlcv[2]}</td><td>{vol(ev.hold.ohlcv[4])}</td><td /><td>{ev.hold.accepted ? 'held' : 'not held'} (limit {f2(ev.hold.depthLimit)})</td></tr>}
+          </tbody>
+        </table>
+      )}
+      <p className="hint">Raw-volume leader {ev.highVolumeReference?.rawLeader ?? '—'}, RVOL leader {ev.highVolumeReference?.normalizedLeader ?? '—'}: context, not extra confirmations.</p>
+    </details>
   );
 }
 
@@ -246,6 +306,7 @@ function DecisionDetail({ x }) {
           </tbody>
         </table>
       </details>
+      {x.pattern?.evidence && <BreakHoldEvidence p={x.pattern} />}
       <details>
         <summary>Strategy checks</summary>
         {x.strategies.map((s) => (

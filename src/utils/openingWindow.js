@@ -118,6 +118,8 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
         resets: 0, outOfOrder: 0, duplicates: 0, minutes: Array.from({ length: MINUTES }, () => null),
         minuteVolume: Array(MINUTES).fill(0), windowVolume: 0, last: null, firstInWindow: null, depth: [],
         vwapSides: [], minuteVwap: Array(MINUTES).fill(null), oiFirst: null, preTick: null,
+        // Strategy D's data quality: observations per minute, and volume that may belong to the previous minute.
+        minuteObs: Array(MINUTES).fill(null), lastObsT: null, straddle: Array(MINUTES).fill(0), lastVolT: null,
       });
     }
     return state.get(token);
@@ -145,6 +147,15 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
     s.ticks++;
     counters.counted++;
     const minute = Math.min(MINUTES - 1, Math.floor((t - startAt) / 60_000));
+
+    // Observation timing per minute (strategy D's quality gates): samples, first/last time, largest gap.
+    if (inOrder) {
+      const ob = (s.minuteObs[minute] ??= { n: 0, firstT: t, lastT: t, maxGap: t - (startAt + minute * 60_000) });
+      if (s.lastObsT != null) ob.maxGap = Math.max(ob.maxGap, Math.min(t - s.lastObsT, t - (startAt + minute * 60_000)));
+      ob.n += 1;
+      ob.lastT = t;
+      s.lastObsT = t;
+    }
 
     // Price candles (sampled LTP).
     if (tick.ltp > 0) {
@@ -175,6 +186,9 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
         if (tick.volume < s.lastVolume) { s.resets++; s.lastVolume = tick.volume; }
         else {
           const inc = tick.volume - s.lastVolume;
+          // The previous reading was in an earlier minute (or before 09:15): part of this increment may belong there.
+          if (inc > 0 && (s.lastVolT == null || s.lastVolT < startAt + minute * 60_000)) s.straddle[minute] += inc;
+          s.lastVolT = t;
           s.minuteVolume[minute] += inc;
           s.windowVolume += inc;
           s.lastVolume = tick.volume;
@@ -217,6 +231,7 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
     const quality = {
       ticks: s?.ticks ?? 0, duplicates: s?.duplicates ?? 0, outOfOrder: s?.outOfOrder ?? 0, resets: s?.resets ?? 0,
       lastTickAgeSec: last ? Math.round((at - last.t) / 1000) : null,
+      lastTradeAgeSec: last?.lastTradeTime ? Math.round((Math.min(at, sealAt) - last.lastTradeTime) / 1000) : null,
       volumeBaseline: s?.baselineSource ?? null,
       depthSamples: s?.depth.length ?? 0,
     };
@@ -291,6 +306,11 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
       // last tick, and the reference spread: the median ₹ spread in the last 30 s before 09:18.
       volumeBaselines: m.volumeMedians ? { ...m.volumeMedians, source: 'Kite 1-minute candles, earlier sessions (median)' } : null,
       minuteVwap: [...s.minuteVwap],
+      // Each minute's volume is a range: the increments whose previous reading was in an earlier minute may belong there.
+      minuteVolumeLow: s.minuteVolume.map((v, i) => Math.max(0, v - s.straddle[i])),
+      minuteQuality: s.minuteObs.map((o, i) => (o ? {
+        samples: o.n, endGapSec: Math.round((startAt + (i + 1) * 60_000 - o.lastT) / 100) / 10, maxGapSec: Math.round(o.maxGap / 100) / 10,
+      } : null)),
       spreadRef: spreadRef(s.depth, startAt),
       volumePerMinute: s.windowVolume / Math.max(1, Math.min(MINUTES, (Math.min(at, sealAt) - startAt) / 60_000)),
       rvol: m.openVol5Avg ? s.windowVolume / m.openVol5Avg : null,

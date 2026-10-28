@@ -25,7 +25,8 @@ function longFeatures(over = {}) {
     minuteVwap: [1002, 1003, 1003.5, 1004, 1004.5], spreadRef: { rupees: 0.5, samples: 6 },
     depth: { bestBid: 1011.45, bestAsk: 1011.5, spreadBps: 0.5, imbalance5: 0.1, stability: 0.9 },
     prevHigh: 1030, prevLow: 980, upperCircuit: 1100, lowerCircuit: 900,
-    quality: { ticks: 200, stale: false }, flags: [], gapPct: 0, ret5Pct: 1.15, closePos: 0.87, orHigh: 1014, orLow: 995,
+    quality: { ticks: 200, stale: false, lastTickAgeSec: 1, lastTradeAgeSec: 1, resets: 0, volumeBaseline: 'NSE pre-open quantity' }, flags: [],
+    minuteQuality: Array.from({ length: 5 }, () => ({ samples: 50, endGapSec: 1, maxGapSec: 2 })), gapPct: 0, ret5Pct: 1.15, closePos: 0.87, orHigh: 1014, orLow: 995,
     ...over,
   };
 }

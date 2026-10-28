@@ -32,6 +32,7 @@ export const DEFAULT_STRATEGY_SETTINGS = {
     minOpeningRvol: 1.5, minBreakoutRvol: 1.5, minBodyRatio: 0.6, minCloseLocation: 0.75, maxWickRatio: 0.25,
     bufferTicks: 2, bufferRangeFrac: 0.05, minSpreadSamples: 3, minBaselineSessions: 15, maxSpreadBps: 15,
     maxChaseR: 0.5, target1R: 2, target2R: 3, minFirstTargetRR: 1.5, entryDeadline: '09:21',
+    maxQuoteAgeSec: 5, maxBarEndGapSec: 5, maxObservationGapSec: 10, // data-quality gates on live ticks
   },
 };
 /** Text settings and their allowed values (the rest are numbers or switches; entryDeadline is a time). */
@@ -179,67 +180,150 @@ export function openingMomentum(f, cfg = DEFAULT_STRATEGY_SETTINGS.momentum) {
  * C1–C3 range (09:15–09:18), frozen before the break; C4 (09:18–09:19) must break it with a strong candle on
  * at least 1.5× its usual same-minute volume, and C5 (09:19–09:20) must close beyond the buffered level again
  * without retesting deep inside. Every rule is a gate; Nifty, sector, OI and acceleration stay context.
- * Starts in shadow mode (evaluated and shown, never traded) until the opening-volume convention has been
- * reconciled against Kite's historical minute bars; switch it to paper in Settings.
+ * Three things are kept apart: the pattern state (below), the execution decision (decision.js) and the
+ * order lifecycle (the paper ledger). Starts in shadow mode (evaluated and shown, never traded) until the
+ * opening-volume convention has been reconciled against Kite's historical minute bars; switch it to paper in Settings.
  */
+export const BREAK_HOLD_VERSION = 'breakHold-v2';
+export const PATTERN_STATES = ['BUILDING', 'SETUP_READY', 'BREAK_OBSERVED', 'WAITING_HOLD', 'CONFIRMED', 'INVALIDATED', 'EXPIRED', 'DATA_INSUFFICIENT'];
 export const BREAK_HOLD_CODES = {
   shorts: 'SHORTS_OFF', history: 'INSUFFICIENT_VOLUME_HISTORY', breakoutVolume: 'WEAK_BREAKOUT_VOLUME', candle: 'WEAK_BREAKOUT_CANDLE',
   hold: 'HOLD_NOT_CONFIRMED', holdDepth: 'HOLD_TOO_DEEP', vwap: 'WRONG_SIDE_OF_VWAP', openingVolume: 'WEAK_OPENING_VOLUME',
-  spreadRef: 'DATA_INSUFFICIENT', spread: 'SPREAD_TOO_WIDE', beyond: 'PRICE_BACK_INSIDE', chase: 'EXTENDED_ENTRY', obstacle: 'OBSTACLE_TOO_CLOSE',
+  spreadRef: 'DATA_INSUFFICIENT', baseline: 'DATA_INSUFFICIENT', resets: 'DATA_INSUFFICIENT', bars: 'DATA_INSUFFICIENT', freshness: 'STALE_QUOTE',
+  spread: 'SPREAD_TOO_WIDE', beyond: 'PRICE_BACK_INSIDE', chase: 'EXTENDED_ENTRY', obstacle: 'OBSTACLE_TOO_CLOSE',
 };
+// Checks about the data itself (a failure means "can't tell", not "the pattern failed") and about execution.
+const DATA_KEYS = new Set(['history', 'spreadRef', 'baseline', 'resets', 'bars', 'freshness']);
+const EXECUTION_KEYS = new Set(['shorts', 'spread', 'beyond', 'chase', 'obstacle']);
+const MINUTE_LABEL = ['09:15', '09:16', '09:17', '09:18', '09:19'];
 const tickUp = (p, tick) => Math.round(Math.ceil(p / tick - 1e-9) * tick * 100) / 100;
 const tickDown = (p, tick) => Math.round(Math.floor(p / tick + 1e-9) * tick * 100) / 100;
+/** A short, stable hash of the settings (FNV-1a), stored with every result. */
+export function settingsHash(cfg) {
+  const text = JSON.stringify(Object.keys(cfg ?? {}).sort().map((k) => [k, cfg[k]]));
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+}
 
-export function breakAndHold(f, cfg = DEFAULT_STRATEGY_SETTINGS.breakHold) {
+/**
+ * The reference for an attempt. 'c1c3' (the primary) is the 09:15–09:18 range; 'c1' and 'rvolLeader' (the C1–C3
+ * candle with the highest same-minute RVOL) are shadow comparisons (§9.3), never ORed with the primary.
+ */
+export function breakReference(candles, kind = 'c1c3', minuteMedian = []) {
+  const [c1, c2, c3] = candles;
+  if (kind === 'c1') return { type: 'C1', label: '09:15 candle', high: c1.h, low: c1.l, startAt: '09:15', frozenAt: '09:16' };
+  if (kind === 'rvolLeader') {
+    const scored = [c1, c2, c3].map((c, i) => ({ c, i, rvol: minuteMedian[i] > 0 ? c.volume / minuteMedian[i] : null })).filter((x) => x.rvol != null);
+    if (!scored.length) return null;
+    const lead = scored.reduce((a, x) => (x.rvol > a.rvol ? x : a)); // ties: the earliest
+    return { type: 'RVOL_LEADER', label: `${MINUTE_LABEL[lead.i]} candle (highest RVOL of 09:15–09:17)`, high: lead.c.h, low: lead.c.l, startAt: MINUTE_LABEL[lead.i], frozenAt: '09:18' };
+  }
+  return { type: 'C1-C3', label: '09:15–09:18 range', high: Math.max(c1.h, c2.h, c3.h), low: Math.min(c1.l, c2.l, c3.l), startAt: '09:15', frozenAt: '09:18' };
+}
+
+export function breakAndHold(f, cfg = DEFAULT_STRATEGY_SETTINGS.breakHold, { reference: refKind = 'c1c3' } = {}) {
   const { check, result } = make('breakHold');
+  const hash = settingsHash(cfg);
+  const dataMode = noBook(f) ? 'historical 1-minute OHLC (candle backtest)' : 'sampled prices (Kite WebSocket ticks)';
   const done = (fields) => {
     const r = result(fields);
-    const failed = r.checks.find((c) => !c.ok);
-    r.code = !r.applies ? fields.code ?? null : failed ? BREAK_HOLD_CODES[failed.key] ?? 'NOT_CONFIRMED' : r.signal ? 'CONFIRMED' : 'NOT_CONFIRMED';
+    const failed = r.checks.filter((c) => !c.ok);
+    const patternFail = failed.find((c) => !EXECUTION_KEYS.has(c.key));
+    const blocker = failed.find((c) => EXECUTION_KEYS.has(c.key));
+    let state = fields.state ?? null;
+    if (r.applies) state = patternFail ? (DATA_KEYS.has(patternFail.key) ? 'DATA_INSUFFICIENT' : 'INVALIDATED') : r.signal ? 'CONFIRMED' : 'INVALIDATED';
+    r.code = !r.applies ? fields.code ?? null : patternFail ? BREAK_HOLD_CODES[patternFail.key] ?? 'NOT_CONFIRMED' : blocker ? BREAK_HOLD_CODES[blocker.key] ?? 'BLOCKED' : 'CONFIRMED';
     if (r.pass && cfg.mode !== 'paper') { r.shadow = true; r.reason = 'confirmed in shadow mode: shown, not traded (Settings: switch D to paper)'; }
+    r.pattern = {
+      state, code: r.code, blocker: !patternFail && blocker ? BREAK_HOLD_CODES[blocker.key] : null,
+      execution: fields.execution ?? (state === 'CONFIRMED' && !blocker ? (r.shadow ? 'NO_TRADE (shadow)' : 'ELIGIBLE') : 'NO_TRADE'),
+      nextEvent: fields.nextEvent ?? null, reference: refKind,
+      label: state === 'CONFIRMED' && !noBook(f) ? 'pattern confirmed on sampled prices' : null,
+    };
+    r.evidence = { strategyId: 'breakHold', strategyVersion: BREAK_HOLD_VERSION, settingsHash: hash, dataMode, ...(fields.evidence ?? {}) };
     return r;
   };
   if (!cfg.enabled) return done({ applies: false, reason: 'turned off', code: 'OFF' });
   const c = f.candles ?? [];
-  if (c.length < 5 || c.slice(0, 5).some((x) => !x)) return done({ applies: false, reason: 'a minute 09:15–09:19 has no data', code: 'DATA_INSUFFICIENT' });
+  if (c.length < 5 || c.slice(0, 5).some((x) => !x)) {
+    const have = c.filter(Boolean).length;
+    return done({ applies: false, reason: 'a minute 09:15–09:19 has no data', code: 'DATA_INSUFFICIENT', state: have < 3 ? 'BUILDING' : 'DATA_INSUFFICIENT' });
+  }
   const [c1, c2, c3, c4, c5] = c;
   const tick = f.tick || 0.05;
-  const H3 = Math.max(c1.h, c2.h, c3.h);
-  const L3 = Math.min(c1.l, c2.l, c3.l);
+  const mm = f.volumeBaselines?.minuteMedian ?? [];
+  const ref = breakReference(c, refKind, mm);
+  if (!ref) return done({ applies: false, reason: 'no same-minute volume baselines for the RVOL leader', code: 'INSUFFICIENT_VOLUME_HISTORY', state: 'DATA_INSUFFICIENT' });
+  const H3 = ref.high;
+  const L3 = ref.low;
   const W3 = H3 - L3;
-  if (!(W3 > 0)) return done({ applies: false, reason: 'no 09:15–09:18 range', code: 'DATA_INSUFFICIENT' });
+  if (!(W3 > 0) || ![H3, L3].every(Number.isFinite)) return done({ applies: false, reason: 'no reference range', code: 'DATA_INSUFFICIENT', state: 'DATA_INSUFFICIENT' });
   // The frozen buffer: at least two ticks, the reference spread (live only) and 5% of the reference range.
   const spread = f.spreadRef?.samples >= cfg.minSpreadSamples ? f.spreadRef.rupees : null;
   const b = tickUp(Math.max(cfg.bufferTicks * tick, spread ?? 0, cfg.bufferRangeFrac * W3), tick);
   const longT = tickUp(H3 + b, tick);
   const shortT = tickDown(L3 - b, tick);
-  const metrics = { H3, L3, b, longThreshold: longT, shortThreshold: shortT, bufferSource: noBook(f) ? 'proxy (no spread in candle data)' : spread != null ? 'reference spread' : 'ticks and range only' };
+  const bufferSource = noBook(f) ? 'proxy (no spread in candle data)' : spread != null ? 'reference spread' : 'ticks and range only';
+  const metrics = { H3, L3, b, longThreshold: longT, shortThreshold: shortT, bufferSource, reference: ref.type };
   // Which high-volume candle of C1–C3 (context, never the reference).
-  const mm = f.volumeBaselines?.minuteMedian ?? [];
   const firstThree = [c1, c2, c3].map((x, i) => ({ i, volume: x.volume, rvol: mm[i] > 0 ? x.volume / mm[i] : null }));
-  metrics.largestVolumeMinute = firstThree.reduce((a, x) => (x.volume > a.volume ? x : a)).i + 1;
+  const rawLeader = firstThree.reduce((a, x) => (x.volume > a.volume ? x : a));
   const byRvol = firstThree.filter((x) => x.rvol != null);
-  metrics.largestRvolMinute = byRvol.length ? byRvol.reduce((a, x) => (x.rvol > a.rvol ? x : a)).i + 1 : null;
+  const rvolLeader = byRvol.length ? byRvol.reduce((a, x) => (x.rvol > a.rvol ? x : a)) : null;
+  metrics.largestVolumeMinute = rawLeader.i + 1;
+  metrics.largestRvolMinute = rvolLeader ? rvolLeader.i + 1 : null;
+  const evidence = {
+    reference: { ...ref, endAt: ref.frozenAt, buffer: b, bufferSource, longThreshold: longT, shortThreshold: shortT },
+    highVolumeReference: {
+      rawLeader: MINUTE_LABEL[rawLeader.i], normalizedLeader: rvolLeader ? MINUTE_LABEL[rvolLeader.i] : null,
+      candles: [c1, c2, c3].map((x, i) => ({ minute: MINUTE_LABEL[i], high: x.h, low: x.l, volume: x.volume, rvol: firstThree[i].rvol, brokenBy0918: c4.c > x.h ? 'high' : c4.c < x.l ? 'low' : null })),
+    },
+  };
 
   let dir = 0;
   if (c4.o <= longT && c4.c >= longT) dir = 1;
   else if (c4.o >= shortT && c4.c <= shortT) dir = -1;
   if (!dir) {
-    const why = c4.o > longT || c4.o < shortT ? ['already beyond the level when 09:18 opened: outside this strategy', 'OUTSIDE_PRIMARY']
-      : c4.h >= longT || c4.l <= shortT ? ['09:18 crossed the level but closed back inside', 'NO_BREAKOUT_CLOSE']
-        : c5.c >= longT || c5.c <= shortT ? ['the break started in the last minute: wait (no 09:20 confirmation)', 'WAIT']
-          : ['no break of the 09:15–09:18 range', 'NO_BREAK'];
-    return done({ applies: false, reason: why[0], code: why[1], metrics });
+    const lead = rvolLeader ? [c1, c2, c3][rvolLeader.i] : null;
+    const internal = refKind === 'c1c3' && lead && (c4.c > lead.h || c4.c < lead.l);
+    const why = c4.o > longT || c4.o < shortT ? ['already beyond the level when 09:18 opened: outside this strategy', 'OUTSIDE_PRIMARY', 'INVALIDATED']
+      : c4.h >= longT || c4.l <= shortT ? ['09:18 crossed the level but closed back inside', 'NO_BREAKOUT_CLOSE', 'INVALIDATED']
+        : c5.c >= longT || c5.c <= shortT ? ['the break started in the last minute: wait (no 09:20 confirmation)', 'WAIT', 'BREAK_OBSERVED']
+          : internal ? [`09:18 closed beyond the ${MINUTE_LABEL[rvolLeader.i]} candle but inside the 09:15–09:18 range`, 'INTERNAL_LEVEL_BROKEN', 'INVALIDATED']
+            : ['no break of the reference range', 'NO_BREAK', 'INVALIDATED'];
+    const wait = why[1] === 'WAIT';
+    return done({
+      applies: false, reason: why[0], code: why[1], state: why[2], metrics, evidence,
+      execution: wait ? 'WAIT' : 'NO_TRADE',
+      nextEvent: wait ? 'not this strategy: the full five-minute-range variant can confirm from 09:22 (shadow)' : null,
+    });
   }
   const T = dir > 0 ? longT : shortT;
   const side = dir > 0 ? 'above' : 'below';
   if (dir < 0) check('shorts', 'Shorts allowed (MIS only)', cfg.allowShorts, cfg.allowShorts ? 'intraday short' : 'short selling turned off');
+
+  // Data quality (live ticks only; historical bars are complete).
+  const q = f.quality ?? {};
+  check.book(f, 'baseline', 'Volume counted from a known start', q.volumeBaseline !== 'first window tick (estimated)', `start: ${q.volumeBaseline ?? 'unknown'}`);
+  check.book(f, 'resets', 'No volume resets', !(q.resets > 0), `${q.resets ?? 0} cumulative-volume resets`);
+  const mq = f.minuteQuality ?? [];
+  const badBar = [0, 1, 2, 3, 4].find((i) => !mq[i] || mq[i].endGapSec > cfg.maxBarEndGapSec || mq[i].maxGapSec > cfg.maxObservationGapSec);
+  check.book(f, 'bars', 'Every minute well observed', badBar === undefined,
+    badBar === undefined ? `last tick within ${cfg.maxBarEndGapSec} s of each minute's end, no gap over ${cfg.maxObservationGapSec} s`
+      : `${MINUTE_LABEL[badBar]}: ${mq[badBar] ? `last tick ${mq[badBar].endGapSec} s before its end, largest gap ${mq[badBar].maxGapSec} s` : 'no ticks'}`);
+  check.book(f, 'freshness', 'Fresh quote and trade', q.lastTickAgeSec != null && q.lastTickAgeSec <= cfg.maxQuoteAgeSec && (q.lastTradeAgeSec == null || q.lastTradeAgeSec <= cfg.maxQuoteAgeSec),
+    `last tick ${q.lastTickAgeSec ?? 'n/a'} s, last trade ${q.lastTradeAgeSec ?? 'n/a'} s before 09:20 (max ${cfg.maxQuoteAgeSec})`);
+
   const vb = f.volumeBaselines;
   const histOk = Boolean(vb && vb.sessions >= cfg.minBaselineSessions && vb.openingMedian > 0 && vb.minuteMedian?.[3] > 0);
   check('history', 'Volume history', histOk, vb ? `${vb.sessions} earlier sessions (min ${cfg.minBaselineSessions}), median opening volume ${vb.openingMedian ?? 'n/a'}` : 'no median volume baselines');
-  const breakoutRvol = histOk ? c4.volume / vb.minuteMedian[3] : null;
-  const openingRvol = histOk ? f.windowVolume / vb.openingMedian : null;
-  check('breakoutVolume', '09:18 minute on strong volume', breakoutRvol != null && breakoutRvol >= cfg.minBreakoutRvol, `${f2(breakoutRvol)}× the usual 09:18 minute (min ${cfg.minBreakoutRvol})`);
+  // Breakout volume on its conservative lower bound: increments straddling the 09:18 boundary may belong to 09:17.
+  const c4Low = f.minuteVolumeLow?.[3] ?? c4.volume;
+  const breakoutRvol = histOk ? c4Low / vb.minuteMedian[3] : null;
+  const openingRvol = histOk && Number.isFinite(f.windowVolume) ? f.windowVolume / vb.openingMedian : null;
+  check('breakoutVolume', '09:18 minute on strong volume', breakoutRvol != null && breakoutRvol >= cfg.minBreakoutRvol,
+    `${f2(breakoutRvol)}× the usual 09:18 minute (min ${cfg.minBreakoutRvol})${c4Low !== c4.volume ? `; lower bound ${c4Low} of ${c4.volume} (some volume may belong to 09:17)` : ''}`);
   const r4 = c4.h - c4.l;
   const body = r4 > 0 ? (dir * (c4.c - c4.o)) / r4 : null;
   const closeLoc = r4 > 0 ? (dir > 0 ? c4.c - c4.l : c4.h - c4.c) / r4 : null;
@@ -259,10 +343,12 @@ export function breakAndHold(f, cfg = DEFAULT_STRATEGY_SETTINGS.breakHold) {
 
   const S = dir > 0 ? tickDown(Math.min(c4.l, c5.l) - b, tick) : tickUp(Math.max(c4.h, c5.h) + b, tick);
   const structural = dir * (T - S);
+  const maxEntryPrice = dir > 0 ? tickDown(T + cfg.maxChaseR * structural, tick) : tickUp(T - cfg.maxChaseR * structural, tick);
+  // The entry anchor is frozen now: the live ask (bid for shorts) at the decision, or the last price on candles.
   const entry = noBook(f) ? f.ltp : dir > 0 ? f.depth?.bestAsk ?? f.ltp : f.depth?.bestBid ?? f.ltp;
   check('beyond', `Price still ${side} the level`, dir * (entry - T) >= 0, `entry ${f2(entry)} vs level ${f2(T)}`);
-  check('chase', 'Entry not extended', structural > 0 && dir * (entry - T) <= cfg.maxChaseR * structural,
-    `${f2(dir * (entry - T))} beyond the level (max ${f2(cfg.maxChaseR * structural)}: ${cfg.maxChaseR}× the structural risk)`);
+  check('chase', 'Entry not extended', structural > 0 && dir * (entry - maxEntryPrice) <= 0,
+    `${f2(dir * (entry - T))} beyond the level (max ${f2(dir * (maxEntryPrice - T))}: ${cfg.maxChaseR}× the structural risk)`);
   // First target: target1R from the entry, capped before the nearest known obstacle (previous-day high/low, circuit).
   const R = dir * (entry - S);
   const obstacles = [dir > 0 ? f.prevHigh : f.prevLow, dir > 0 ? f.upperCircuit : f.lowerCircuit].filter((x) => x > 0 && dir * (x - entry) > 0);
@@ -274,12 +360,26 @@ export function breakAndHold(f, cfg = DEFAULT_STRATEGY_SETTINGS.breakHold) {
   const t2 = capped(entry + dir * cfg.target2R * R);
   const target2 = dir * t2 >= dir * target1 ? t2 : target1;
   const signal = R > 0 ? {
-    direction: dir, immediate: true, trigger: entry, stop: S, target1, target2,
-    minFirstTargetRR: cfg.minFirstTargetRR, entryDeadline: cfg.entryDeadline,
-    note: `09:15–09:18 range broken at 09:18 and held at 09:19; enter at the ${dir > 0 ? 'ask' : 'bid'} by ${cfg.entryDeadline}; stop ${dir > 0 ? 'below the 09:18–09:19 lows' : 'above the 09:18–09:19 highs'} less the buffer; target 1 ${cfg.target1R}R${cap != null ? ' (capped before the obstacle)' : ''}`,
+    direction: dir, immediate: true, trigger: entry, stop: S, target1, target2, maxEntryPrice,
+    minFirstTargetRR: cfg.minFirstTargetRR, entryDeadline: cfg.entryDeadline, strategyVersion: BREAK_HOLD_VERSION,
+    // Rechecked by the paper ledger on every tick before the fill: back inside the level cancels; a missing,
+    // crossed or wide book, a stale trade or the wrong side of VWAP waits (until the deadline).
+    revalidate: { direction: dir, level: T, maxSpreadBps: cfg.maxSpreadBps, maxQuoteAgeSec: cfg.maxQuoteAgeSec },
+    note: `${ref.label} broken at 09:18 and held at 09:19; enter at the ${dir > 0 ? 'ask' : 'bid'} by ${cfg.entryDeadline}, no further than ${f2(maxEntryPrice)}; stop ${dir > 0 ? 'below the 09:18–09:19 lows' : 'above the 09:18–09:19 highs'} less the buffer; target 1 ${cfg.target1R}R${cap != null ? ' (capped before the obstacle)' : ''}`,
   } : null;
-  Object.assign(metrics, { breakoutRvol, openingRvol, body, closeLocation: closeLoc, wick, threshold: T, stop: S, structuralRisk: structural });
-  return done({ applies: true, direction: dir, signal, summary: `${sideWord(dir)} break and hold`, metrics });
+  Object.assign(metrics, { breakoutRvol, openingRvol, body, closeLocation: closeLoc, wick, threshold: T, stop: S, structuralRisk: structural, maxEntryPrice, spreadBps: f.depth?.spreadBps ?? null });
+  Object.assign(evidence, {
+    breakout: { candleStartAt: '09:18', availableAt: '09:19', ohlcv: [c4.o, c4.h, c4.l, c4.c, c4.volume], volumeLowerBound: c4Low, bodyRatio: body, closeLocation: closeLoc, wick, minuteRvol: breakoutRvol, approximate: Boolean(c4.approximate) },
+    hold: { candleStartAt: '09:19', availableAt: '09:20', ohlcv: [c5.o, c5.h, c5.l, c5.c, c5.volume], closeBeyond: dir * (c5.c - T) >= 0, depthLimit: limit, accepted: dir * (c5.c - T) >= 0 && (dir > 0 ? c5.l >= limit : c5.h <= limit) },
+    volume: {
+      openingActual: f.windowVolume, openingBaseline: vb?.openingMedian ?? null, openingRvol, statistic: 'median', historyDays: vb?.sessions ?? 0,
+      minuteBaseline: vb?.minuteMedian?.[3] ?? null, source: vb?.source ?? null, auctionPolicy: q.volumeBaseline ?? (noBook(f) ? 'Kite historical minute bars as published' : null),
+    },
+    vwap: { source: f.vwapSource ?? null, breakoutValue: v4 ?? null, holdValue: v5 ?? null, currentValue: f.vwap ?? null },
+    quality: { approximate: !noBook(f), minutes: mq, lastTickAgeSec: q.lastTickAgeSec ?? null, lastTradeAgeSec: q.lastTradeAgeSec ?? null, resets: q.resets ?? 0 },
+    entry: { anchor: entry, maxEntry: maxEntryPrice, invalidation: T, deadline: cfg.entryDeadline },
+  });
+  return done({ applies: true, direction: dir, signal, summary: `${sideWord(dir)} break and hold`, metrics, evidence });
 }
 
 export const STRATEGIES = { orb: openingRangeBreakout, gapPullback: gapUpPullbackRecovery, momentum: openingMomentum, breakHold: breakAndHold };

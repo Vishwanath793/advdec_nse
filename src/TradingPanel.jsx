@@ -197,7 +197,8 @@ export const STRATEGY_FIELDS = {
     ['minCloseLocation', 'Min breakout close location (0–1)'], ['maxWickRatio', 'Rejection wick shown above (0–1)'], ['bufferTicks', 'Buffer: at least ticks'],
     ['bufferRangeFrac', 'Buffer: at least × the 3-minute range'], ['minSpreadSamples', 'Min spread samples before 09:18'], ['minBaselineSessions', 'Min earlier sessions'],
     ['maxSpreadBps', 'Max spread (bps)'], ['maxChaseR', 'Max chase (× structural risk)'], ['target1R', 'Target 1 (R, before obstacles)'], ['target2R', 'Target 2 (R)'],
-    ['minFirstTargetRR', 'Min reward/risk to target 1 (after costs)'],
+    ['minFirstTargetRR', 'Min reward/risk to target 1 (after costs)'], ['maxQuoteAgeSec', 'Max quote / last-trade age (s)'],
+    ['maxBarEndGapSec', 'Max gap before each minute\'s end (s)'], ['maxObservationGapSec', 'Max gap between ticks (s)'],
   ],
 };
 

@@ -43,6 +43,12 @@ export function cleanScoringSettings(input = {}) {
 }
 
 const NO_DAY = { killSwitch: false, realised: 0, trades: 0, open: 0, consecutiveLosses: 0 };
+/** Strategy D is gated, not scored: its own eligibility and ranking (docs/plan-920-volume-breakout-confirmation.md §11). */
+const OWN_GATES = 'breakHold';
+export const D_RANK_RULE = 'D: higher net reward/risk to target 1, then higher 09:18 RVOL (capped at 3), then lower spread, then symbol. A selection rule, not a probability.';
+const dOrder = (a, b) => ((b.plan.firstTargetRR ?? 0) - (a.plan.firstTargetRR ?? 0))
+  || (Math.min(3, b.pattern?.metrics?.breakoutRvol ?? 0) - Math.min(3, a.pattern?.metrics?.breakoutRvol ?? 0))
+  || ((a.spreadBps ?? Infinity) - (b.spreadBps ?? Infinity)) || a.symbol.localeCompare(b.symbol);
 
 /** One stock: the best plan among its passing strategies, or why there's none. */
 export function evaluateStock(f, { strategies, risk, scoring, partial = false, availableMargin = null } = {}) {
@@ -55,7 +61,8 @@ export function evaluateStock(f, { strategies, risk, scoring, partial = false, a
     const plan = buildTradePlan(r.signal, f, risk, { availableMargin });
     return { result: r, plan, score: scoreOpening(f, options(r, plan)) };
   });
-  tried.sort((a, b) => (b.plan.ok - a.plan.ok) || (b.score.score - a.score.score) || ((b.plan.rewardRisk ?? 0) - (a.plan.rewardRisk ?? 0)));
+  const isD = (t) => t.result.strategy === OWN_GATES;
+  tried.sort((a, b) => (b.plan.ok - a.plan.ok) || (isD(b) - isD(a)) || (b.score.score - a.score.score) || ((b.plan.rewardRisk ?? 0) - (a.plan.rewardRisk ?? 0)));
   const best = tried[0] ?? null;
   // Without a passing strategy, still score the stock's own direction so the scanner can show it.
   const nearest = results.filter((r) => r.applies).sort((a, b) => b.checks.filter((c) => c.ok).length / Math.max(1, b.checks.length) - a.checks.filter((c) => c.ok).length / Math.max(1, a.checks.length))[0];
@@ -70,14 +77,17 @@ export function evaluateStock(f, { strategies, risk, scoring, partial = false, a
     reasons.push('no strategy setup', ...why);
   } else {
     if (!best.plan.ok) reasons.push(...best.plan.reasons);
-    if (best.score.score == null || best.score.score < scoring.minScore) reasons.push(`score ${best.score.score ?? 'n/a'} is below ${scoring.minScore}`);
+    if (!isD(best) && (best.score.score == null || best.score.score < scoring.minScore)) reasons.push(`score ${best.score.score ?? 'n/a'} is below ${scoring.minScore}`);
   }
-  const eligible = Boolean(best) && rejections.length === 0 && best.plan.ok && best.score.score >= scoring.minScore;
+  const eligible = Boolean(best) && rejections.length === 0 && best.plan.ok && (isD(best) || best.score.score >= scoring.minScore);
+  const d = results.find((r) => r.strategy === OWN_GATES);
   return {
     symbol: f.symbol, token: f.token, sector: f.sector, direction, eligible,
     strategy: best?.result.strategy ?? null, strategyLabel: best?.result.label ?? null,
     score: score.score, tier: score.tier, coverage: score.coverage, groups: score.groups, factors: score.factors,
-    plan: best?.plan ?? null, signalNote: best?.result.signal?.note ?? null,
+    plan: best?.plan ?? null, signalNote: best?.result.signal?.note ?? null, spreadBps: f.depth?.spreadBps ?? null,
+    // Strategy D's pattern state, evidence and audit record (shown whether or not it trades).
+    pattern: d?.pattern ? { ...d.pattern, metrics: d.metrics ?? null, evidence: d.evidence ?? null, shadow: Boolean(d.shadow) } : null,
     rejections, reasons,
     strategies: results.map((r) => ({
       strategy: r.strategy, label: r.label, applies: r.applies, pass: r.pass, shadow: Boolean(r.shadow), code: r.code ?? null,
@@ -113,8 +123,14 @@ export function decideOpening(sealed, { strategies = {}, risk = {}, scoring = {}
   const evaluations = (sealed?.stocks ?? []).map((f) => ({ ...evaluateStock(f, { strategies: st, risk: r, scoring: sc, partial, availableMargin }), gapPct: f.gapPct }));
   const blockers = tradeBlockers({ ...NO_DAY, ...day }, r);
   const slots = Math.max(0, Math.min(r.maxOpenPositions - (day.open ?? 0), r.maxTradesPerDay - (day.trades ?? 0)));
-  const ranked = evaluations.filter((e) => e.eligible).sort((a, b) => b.score - a.score || (b.plan.rewardRisk ?? 0) - (a.plan.rewardRisk ?? 0));
-  ranked.forEach((e, i) => { e.rank = i + 1; });
+  // Strategy D (explicitly selected in paper mode) ranks first by its own rule; the others by score. Scales are never pooled.
+  const ranked = evaluations.filter((e) => e.eligible).sort((a, b) => {
+    const ad = a.strategy === OWN_GATES;
+    const bd = b.strategy === OWN_GATES;
+    if (ad !== bd) return bd - ad;
+    return ad ? dOrder(a, b) : b.score - a.score || (b.plan.rewardRisk ?? 0) - (a.plan.rewardRisk ?? 0);
+  });
+  ranked.forEach((e, i) => { e.rank = i + 1; e.rankRule = e.strategy === OWN_GATES ? D_RANK_RULE : 'score, then reward/risk'; });
   for (const e of evaluations) {
     e.decision = 'NO TRADE';
     if (!e.eligible) continue;
@@ -135,4 +151,19 @@ export function decideOpening(sealed, { strategies = {}, risk = {}, scoring = {}
 export const decisionRow = (d) => ({
   symbol: d.symbol, decision: d.decision, strategy: d.strategy, strategyLabel: d.strategyLabel ?? (d.strategy ? STRATEGY_LABEL[d.strategy] : null),
   score: d.score, tier: d.tier, rank: d.rank ?? null, reasons: d.reasons.slice(0, 3),
+  pattern: d.pattern ? patternRow(d) : null,
 });
+
+/** Strategy D's scanner line: state, code, direction, level, 09:18 RVOL, opening RVOL, hold, VWAP, data, decision, blocker, next event. */
+export function patternRow(d) {
+  const p = d.pattern;
+  const m = p.metrics ?? {};
+  const ev = p.evidence ?? {};
+  return {
+    state: p.state, code: p.code, shadow: p.shadow, direction: d.direction > 0 ? 'LONG' : 'SHORT', level: m.threshold ?? null,
+    reference: ev.reference ? `${ev.reference.label} ${m.L3 ?? ''}–${m.H3 ?? ''}` : null, buffer: m.b ?? null,
+    breakoutRvol: m.breakoutRvol ?? null, openingRvol: m.openingRvol ?? null, hold: ev.hold ? (ev.hold.accepted ? 'held' : 'not held') : null,
+    dataMode: ev.dataMode ?? null, label: p.label, execution: d.strategy === OWN_GATES ? d.decision : p.execution, blocker: p.blocker,
+    nextEvent: p.nextEvent, version: ev.strategyVersion ?? null, settingsHash: ev.settingsHash ?? null,
+  };
+}

@@ -36,9 +36,13 @@ export function buildTradePlan(signal, features, riskSettings, { availableMargin
   const touch = up ? bestAsk : bestBid;
   const triggerRaw = signal.immediate ? touch ?? features.ltp : signal.trigger;
   const trigger = r2(up ? roundUp(triggerRaw, tick) : roundDown(triggerRaw, tick));
+  const expectedEntryOf = (t) => r2(up ? t + (t * s.slippageBps) / 10_000 : t - (t * s.slippageBps) / 10_000);
   const slip = (trigger * s.slippageBps) / 10_000;
   const expectedEntry = r2(up ? trigger + slip : trigger - slip);
-  const maxEntry = r2(up ? trigger * (1 + s.maxSlippageBps / 10_000) : trigger * (1 - s.maxSlippageBps / 10_000));
+  let maxEntry = r2(up ? trigger * (1 + s.maxSlippageBps / 10_000) : trigger * (1 - s.maxSlippageBps / 10_000));
+  // A strategy's own chase limit (D: half the structural risk past its level), frozen at the decision.
+  if (signal.maxEntryPrice != null) maxEntry = r2(up ? Math.min(maxEntry, signal.maxEntryPrice) : Math.max(maxEntry, signal.maxEntryPrice));
+  if (signal.maxEntryPrice != null && (up ? expectedEntryOf(trigger) > maxEntry : expectedEntryOf(trigger) < maxEntry)) reasons.push(`expected entry is beyond the chase limit ₹${maxEntry} (EXTENDED_ENTRY)`);
   const stop = r2(up ? roundDown(signal.stop, tick) : roundUp(signal.stop, tick));
   const target1 = r2(up ? roundDown(signal.target1, tick) : roundUp(signal.target1, tick));
   const target2 = r2(up ? roundDown(signal.target2, tick) : roundUp(signal.target2, tick));
@@ -78,6 +82,7 @@ export function buildTradePlan(signal, features, riskSettings, { availableMargin
     riskPerShare: r2(riskPerShare), qty, firstExitQty: half, riskAmount: r2(netRisk), notional: r2(qty * expectedEntry),
     grossReward: r2(grossReward), costs, netReward: r2(netReward), rewardRisk: rewardRisk != null ? r2(rewardRisk) : null,
     firstTargetRR: firstTargetRR != null ? r2(firstTargetRR) : null, entryDeadline: signal.entryDeadline ?? null,
+    ...(signal.revalidate ? { revalidate: signal.revalidate, strategyVersion: signal.strategyVersion ?? null } : {}),
     slippageBps: s.slippageBps, maxSlippageBps: s.maxSlippageBps, tick, chargeRates: s.charges,
     ok: reasons.length === 0, reasons,
   };

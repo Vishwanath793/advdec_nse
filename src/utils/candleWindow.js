@@ -106,6 +106,7 @@ export function candleFeatures(meta, candles, market = {}) {
     // Strategy D: median baselines from earlier days' candles; VWAP as of each minute; no book, so no reference spread.
     volumeBaselines: meta.volumeMedians ? { ...meta.volumeMedians, source: 'Kite 1-minute candles, earlier sessions (median)' } : null,
     minuteVwap, spreadRef: null,
+    minuteVolumeLow: minuteVolume, minuteQuality: null, // historical bars are complete: no sampling gaps to judge
     rvol: meta.openVol5Avg ? windowVolume / meta.openVol5Avg : null,
     volAccel: firstRate > 0 ? lastRate / firstRate : null,
     avgVolume20: null,

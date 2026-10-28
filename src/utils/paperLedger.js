@@ -234,6 +234,7 @@ export function orderEvents(state, decision, { at, entryUntilAt, tagPrefix = 'P9
         side: p.side, direction: p.direction, strategy: d.strategy, product: 'MIS', qty: p.qty, firstExitQty: p.firstExitQty,
         trigger: p.trigger, maxEntry: p.maxEntry, stop: p.stop, target1: p.target1, target2: p.target2, immediate: p.immediate,
         score: d.score, expiresAt: entryExpiry(state.date, entryUntilAt, p.entryDeadline), ...(p.chargeRates ? { chargeRates: p.chargeRates } : {}),
+        ...(p.revalidate ? { revalidate: p.revalidate, strategyVersion: p.strategyVersion ?? null } : {}),
       },
     });
   }
@@ -291,6 +292,18 @@ export function stepTick(state, tick, at, risk, { squareOffAt = null, gap = {} }
       const p = state.positions.find((x) => x.id === o.id);
       if (p?.plan && !p.exits.length) emit({ type: 'levels', positionId: p.id, levels: replanAfterFill(p.plan, p.avgEntry, gap.settings), at: iso });
       continue;
+    }
+    // Strategy D rechecks the market before every fill: back inside its level cancels the attempt; a missing,
+    // crossed or too-wide book, a stale last trade or the wrong side of VWAP means no fill on this tick.
+    if (o.revalidate && !o.filledQty) {
+      const rv = o.revalidate;
+      if (tick.ltp > 0 && rv.direction * (tick.ltp - rv.level) < 0) { emit({ type: 'cancel', orderId: o.id, reason: `price ₹${tick.ltp} back inside the level ₹${rv.level} (PRICE_BACK_INSIDE)`, at: iso }); continue; }
+      const bid = levels(tick, 'buy')[0]?.price;
+      const ask = levels(tick, 'sell')[0]?.price;
+      if (!(bid > 0) || !(ask > 0) || bid >= ask) continue;
+      if (((ask - bid) / ((ask + bid) / 2)) * 10_000 > rv.maxSpreadBps) continue;
+      if (tick.lastTradeTime && rv.maxQuoteAgeSec != null && at - tick.lastTradeTime > rv.maxQuoteAgeSec * 1000) continue;
+      if (tick.avgPrice > 0 && rv.direction * (tick.ltp - tick.avgPrice) <= 0) continue;
     }
     if (o.status === 'PENDING') {
       const crossed = o.immediate || (tick.ltp != null && (up ? tick.ltp >= o.trigger : tick.ltp <= o.trigger));
