@@ -312,6 +312,7 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
         samples: o.n, endGapSec: Math.round((startAt + (i + 1) * 60_000 - o.lastT) / 100) / 10, maxGapSec: Math.round(o.maxGap / 100) / 10,
       } : null)),
       spreadRef: spreadRef(s.depth, startAt),
+      spreadRef5: spreadRef(s.depth, startAt + 120_000), // 09:19:30–09:20: the full-range variant's buffer
       volumePerMinute: s.windowVolume / Math.max(1, Math.min(MINUTES, (Math.min(at, sealAt) - startAt) / 60_000)),
       rvol: m.openVol5Avg ? s.windowVolume / m.openVol5Avg : null,
       volAccel: firstRate > 0 ? lastRate / firstRate : null,

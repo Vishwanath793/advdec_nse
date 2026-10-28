@@ -364,6 +364,7 @@ const tradingDesk = createTradingDesk({
   gapList: gapEntries,
   // Strategy D trades on paper only after its volume check (Report card → Research) matched.
   strategyContext: () => ({ breakHold: { volumeMatched: readJsonFile('research/reconcile-last.json')?.verdict?.matched === true } }),
+  readTicks: (date) => tickLog.read(date), // strategy D's later variants, from the day's recording
   // A stock outside today's opening universe (e.g. opted in after 09:10): its pre-open row, plus Kite's ATR fetched for it.
   gapFallback: createGapFallback({ preopenStocks, instruments: instrumentService, history: historyService, session: () => kiteSession }),
 });

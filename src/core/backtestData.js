@@ -25,7 +25,7 @@ import { sectorIndexKey } from '../utils/confirmation.js';
 export const MIN_GAP_PCT = 0.5;
 export const MAX_GAP_PCT = 20; // above this, assume a corporate action rather than a real gap
 export const DEFAULT_MAX_PER_DAY = 15;
-export const MAX_DAYS = 60;
+export const MAX_DAYS = 80; // 60 sessions to develop and 20 untouched (strategy D's research schedule)
 export const SPAN_DAYS = 55; // Kite allows 60 days of 1-minute data per request
 export const BASELINE_DAYS = 20; // the same look-back as live (kiteHistory OPENING_VOLUME_DAYS)
 const ATR_PERIOD = 14;
@@ -202,7 +202,7 @@ export function createBacktestData({ store, kite, instruments, calendar, context
         stocks.push({
           meta: {
             ...s.meta, token: c.e.token, tick: c.e.tick, lot: c.e.lot, openVol5Avg: base?.avg ?? null,
-            volumeMedians: md ? { openingMedian: md.openingMedian, minuteMedian: md.minuteMedian, sessions: md.sessions } : null,
+            volumeMedians: md ? { openingMedian: md.openingMedian, minuteMedian: md.minuteMedian, openingMean: md.openingMean, minuteMean: md.minuteMean, sessions: md.sessions } : null,
           },
           candles: asDate(today),
         });

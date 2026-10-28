@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './platform/index.js';
+import { VARIANT_LABEL } from './utils/breakoutConfirmation.js';
 import OpeningChart from './OpeningChart.jsx';
 
 /**
@@ -190,6 +191,7 @@ export default function OpeningScanner() {
         </p>
       )}
       <BreakHoldTable rows={data?.trading?.decisions ?? []} onPick={setSelected} />
+      <LaterVariants v={data?.trading?.variants} />
       {selected && detail && <OpeningDetail d={detail} decision={decision} gap={gapLevels(data?.trading?.ledgerState, selected)} onClose={() => setSelected(null)} />}
       <p className="hint">
         Decisions are made once at 09:20 and traded on paper only (simulated fills at the bid/ask plus slippage);
@@ -229,6 +231,33 @@ function BreakHoldTable({ rows, onPick }) {
         </table>
       </div>
       <p className="hint">Confirmed means the pattern passed on sampled prices; it isn't a fill, and doesn&apos;t mean the move continues. D ranks by reward/risk to target 1, then 09:18 RVOL (capped at 3), then spread: a selection rule, not a probability.</p>
+    </details>
+  );
+}
+
+/** Strategy D's later variants (shadow only), judged at 09:25:30 from the recording: what confirmed, and when. */
+function LaterVariants({ v }) {
+  if (!v?.rows?.length) return null;
+  const keys = ['fullRange', 'retest', 'c1', 'rvolLeader'];
+  const shown = v.rows.filter((r) => keys.some((k) => r[k].state === 'CONFIRMED' || ['EXPIRED', 'INVALIDATED'].includes(r[k].state) && !['NO_BREAK', 'NO_VALID_BREAKOUT', 'NO_RETEST'].includes(r[k].code)));
+  return (
+    <details className="score-details">
+      <summary>D · later variants (shadow, judged at {time(v.at)}): {v.rows.filter((r) => keys.some((k) => r[k].state === 'CONFIRMED')).length} confirmation(s) among {v.rows.length} stocks</summary>
+      {shown.length ? (
+        <div className="table-wrap">
+          <table className="research-table">
+            <thead><tr><th>Stock</th>{keys.map((k) => <th key={k}>{VARIANT_LABEL[k]}</th>)}</tr></thead>
+            <tbody>
+              {shown.map((r) => (
+                <tr key={r.symbol}><td className="mono">{r.symbol}</td>
+                  {keys.map((k) => <td key={k} title={r[k].detail ?? ''}>{r[k].state}{r[k].confirmedAt ? ` ${r[k].confirmedAt}` : ''} <span className="hint">{r[k].code}{r[k].direction ? (r[k].direction > 0 ? ' long' : ' short') : ''}</span></td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="hint">No breaks of the later references.</p>}
+      <p className="hint">Separate experiments with their own references and expiry (09:25); they are recorded for research and never traded.</p>
     </details>
   );
 }

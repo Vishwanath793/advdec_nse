@@ -6,6 +6,7 @@ import { cleanRiskSettings, DEFAULT_RISK_SETTINGS, tradeBlockers } from '../util
 import { DEFAULT_STRATEGY_SETTINGS, STRATEGY_CHOICES, strategySettings } from '../utils/strategies.js';
 import { cleanGapExitSettings, DEFAULT_GAP_EXIT_SETTINGS, gapExitPlan } from '../utils/gapExits.js';
 import { SIMULATED_DATE, SIMULATED_GAP_LIST } from '../utils/simulatedMorning.js';
+import { evaluateVariants, laterBarsFromTicks } from '../utils/breakoutConfirmation.js';
 
 /**
  * The 09:20 trading desk (milestone 2: PAPER only).
@@ -82,6 +83,7 @@ export function createTradingDesk({
   setTimer = setTimeout, clearTimer = clearTimeout, onUpdate = () => {},
   gapList = async () => [], gapFallback = async () => null,
   strategyContext = async () => ({}), // runtime facts merged into strategy settings, e.g. { breakHold: { volumeMatched } }
+  readTicks = async () => null, // the day's recorded ticks { meta, ticks: [{ tick, receivedAt }] } (strategy D's later variants)
 }) {
   const cfg = () => cleanTradingSettings(settings());
   const changed = () => { try { onUpdate(); } catch { /* ignore */ } };
@@ -95,6 +97,41 @@ export function createTradingDesk({
   const gapPlans = { day: [], replay: [] };
   const metas = { day: null, replay: null };
   let replayStarted = false;
+  // Strategy D's later variants (shadow only), judged once the 09:20–09:24 bars are complete.
+  const VARIANTS_AT = '09:25';
+  const VARIANTS_GRACE_MS = 30_000;
+  const variants = { day: null, replay: null };
+  const sealedBy = { day: null, replay: null };
+  let replayTicks = [];
+  let variantsTimer = null;
+
+  /** Every universe stock's later variants from its ticks; saved for the day ledger. */
+  async function judgeVariants(ledger, sealed, ticks) {
+    const byToken = new Map();
+    for (const t of ticks) {
+      if (!byToken.has(t.token)) byToken.set(t.token, []);
+      byToken.get(t.token).push(t);
+    }
+    const cfgD = cfg().strategies.breakHold;
+    const rows = (sealed.stocks ?? []).filter((f) => f.candles?.length === 5).map((f) => evaluateVariants(f, laterBarsFromTicks(byToken.get(f.token) ?? []), cfgD));
+    variants[ledger] = { date: sealed.date, at: now().toISOString(), rows };
+    if (ledger === 'day') await store.write(`paper/${sealed.date}-variants.json`, variants.day);
+    changed();
+    return variants[ledger];
+  }
+  async function judgeDay(date) {
+    if (variants.day?.date === date) return variants.day;
+    const sealed = sealedBy.day?.date === date ? sealedBy.day : null;
+    const rec = sealed ? await Promise.resolve(readTicks(date)).catch(() => null) : null;
+    if (!sealed || !rec?.ticks?.length) return null;
+    return judgeVariants('day', sealed, rec.ticks.map((x) => x.tick));
+  }
+  function armVariants(date) {
+    if (variantsTimer) clearTimer(variantsTimer);
+    const wait = at(date, VARIANTS_AT) + VARIANTS_GRACE_MS - +now();
+    if (wait <= 0) { judgeDay(date).catch(() => {}); return; }
+    variantsTimer = setTimer(() => { variantsTimer = null; judgeDay(date).catch(() => {}); }, wait);
+  }
   let links = { follow: () => {}, unfollow: () => {} };
   let squareOffTimer = null;
   let lastReconcile = null;
@@ -165,6 +202,7 @@ export function createTradingDesk({
       decisions: state?.decision?.rows ?? decisions[ledger]?.decisions.map(decisionRow) ?? [],
       gapReport: state?.decision?.gapReport ?? decisions[ledger]?.gapReport ?? [],
       gapEntries: { plans: gapPlans[ledger], totals: state?.gap ?? null },
+      variants: variants[ledger]?.date === state?.date ? variants[ledger] : null,
       reconcile: ledger === 'day' ? lastReconcile : null,
     };
   }
@@ -179,7 +217,7 @@ export function createTradingDesk({
      */
     async onStart({ date, meta, replay = false }) {
       const ledger = replay ? 'replay' : 'day';
-      if (replay) { brokers.replay.reset(date); replayStarted = true; } else {
+      if (replay) { brokers.replay.reset(date); replayStarted = true; replayTicks = []; variants.replay = null; } else {
         lastReconcile = await brokers.day.load(date);
         armSquareOff(date);
       }
@@ -198,6 +236,8 @@ export function createTradingDesk({
         lastReconcile = await brokers.day.load(sealed.date);
         armSquareOff(sealed.date);
       }
+      sealedBy[ledger] = sealed;
+      if (!replay) armVariants(sealed.date);
       brokers[ledger].sealCheck(sealed); // the 9:15 gap entries' 09:20 check, from the sealed window
       const result = await decide(sealed, ledger, { partial });
       changed();
@@ -207,6 +247,7 @@ export function createTradingDesk({
     /** Every tick batch from the collector (only matters once there are orders). */
     onTicks(ticks, receivedAt, { replay = false } = {}) {
       const broker = brokers[replay ? 'replay' : 'day'];
+      if (replay && replayTicks.length < 500_000) replayTicks.push(...ticks);
       const date = broker.state?.date;
       broker.onTicks(ticks, receivedAt, { squareOffAt: date && !replay ? at(date, cfg().risk.squareOffAt) : null });
     },
@@ -214,6 +255,7 @@ export function createTradingDesk({
     /** End of a replay: close what's still open at the last bid/ask. */
     onReplayEnd() {
       if (brokers.replay.state) brokers.replay.closeAll('replay ended (closed at the last bid/ask)');
+      if (sealedBy.replay) judgeVariants('replay', sealedBy.replay, replayTicks).catch(() => {});
     },
 
     keepTokens: () => brokers.day.openTokens(),
@@ -231,6 +273,10 @@ export function createTradingDesk({
       if (sealed) {
         decisions.day = decisions.day?.date === date ? decisions.day : await store.read(`paper/${date}-decision.json`);
         if (!brokers.day.state.decidedAt && +now() < at(date, cfg().risk.entryUntil)) await decide(sealed, 'day');
+        // The later variants: loaded if already judged, else judged now (after 09:25:30) or then.
+        sealedBy.day = sealed;
+        variants.day = (await store.read(`paper/${date}-variants.json`)) ?? null;
+        if (!variants.day) armVariants(date);
       }
       armSquareOff(date);
       const tokens = brokers.day.openTokens();

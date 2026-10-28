@@ -89,7 +89,7 @@ export function replayReport(results) {
     trades: closed.map(({ plan, ...t }) => ({ ...t, r: t.r != null ? Math.round(t.r * 100) / 100 : null, rewardRisk: plan?.rewardRisk ?? null })),
     notFilled: results.flatMap((r) => r.notFilled),
     limitations: [
-      'Recorded mornings end at 09:25: positions still open then are closed at the last recorded bid/ask, so later exits (targets, stops, the 15:10 square-off) are not judged.',
+      'Recorded mornings end at 09:40 (09:25 for mornings recorded before 29 Oct 2026): positions still open then are closed at the last recorded bid/ask, so later exits (targets, stops, the 15:10 square-off) are not judged.',
       'Fills use the recorded five-level book plus slippage; queue position, hidden liquidity and latency are not modelled.',
     ],
   };

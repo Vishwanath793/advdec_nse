@@ -39,6 +39,48 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 ## Entries (newest first)
 
+### 2026-10-28: Strategy D completed against its brief (Claude Code for vinayakb374, android-app, commits f1a3629, 1b3794a and the next)
+**What changed:** the parts of `docs/plan-920-volume-breakout-confirmation.md` left out of the first version.
+- **States and evidence (§11, §12)**: pattern state (BUILDING … CONFIRMED, INVALIDATED, DATA_INSUFFICIENT, WAIT
+  via BREAK_OBSERVED) kept apart from the decision and the order; reason code, main blocker, next event; an audit
+  record per stock (version `breakHold-v2`, settings hash, frozen reference, breakout and hold bars, volume and VWAP
+  sources, quality, entry anchor). Scanner: a D table and the evidence in the candidate detail.
+- **Ranking (§11)**: D is gated, not scored: no legacy minimum score; ranked by first-target net R:R, 09:18 RVOL
+  (capped 3), spread, symbol; in paper mode D is the strategy selected for its stock; D candidates fill slots first.
+- **Data quality (§5.3)**: estimated volume start, resets, last tick > 5 s before a minute's end, gaps > 10 s, quote
+  or trade > 5 s old → DATA_INSUFFICIENT; the window now records per-minute observation timing and a conservative
+  lower bound of each minute's volume (increments straddling a boundary), and the 09:18 gate uses the lower bound.
+- **Execution (§8)**: chase cap frozen in the plan's max entry; paper fills rechecked per tick (back inside the
+  level cancels; missing/crossed/wide book, stale trade, wrong VWAP side wait).
+- **Volume check (§5.2)**: `utils/volumeReconcile.js`, `POST /api/research/reconcile`: recorded tick volumes per
+  minute vs Kite's 1-minute bars, per-minute ratios (09:15 apart), verdict, Excel. D in paper mode is
+  DATA_INSUFFICIENT until it matches (setting `requireVolumeMatch`); research runs aren't blocked.
+- **Later variants (§9, shadow only)**: `utils/breakoutConfirmation.js`: full five-minute range (earliest 09:22,
+  expires at 09:25), retest, 09:15-candle and RVOL-leader references. The desk judges them at 09:25:30 from the day's
+  recording (`readTicks`), saves `paper/DATE-variants.json`, reloads after a restart; the replay ledger judges them
+  at the replay's end. **The collector now records to 09:40 and disconnects at 09:41** (was 09:25 / 09:30).
+- Baselines: `openingMedians` covers 09:20–09:24 too and keeps means (HISTORY_VERSION 5, fetched to 09:25).
+- **Research (§15)**: `utils/breakoutResearch.js` in every candle backtest: pattern study (+1R before −1R within
+  15 min of the first executable price, ambiguous apart, MFE/MAE, back in range ≤ 5 min, delay) for D, ablations
+  (volume-only, no volume gates, two-bar hold, mean baselines) and variants; predeclared sensitivities; 60 + 20
+  session split with a per-session 95% interval. MAX_DAYS 80.
+- The simulated morning has median baselines, so D shows its states there (several CONFIRMED but EXTENDED_ENTRY,
+  a WAIT, WEAK_BREAKOUT_VOLUME, INTERNAL_LEVEL_BROKEN, NO_BREAK, BUILDING). Its paper trades are unchanged.
+**Files:** src/utils/strategies.js, decision.js, tradePlan.js, paperLedger.js, openingWindow.js, candleWindow.js,
+backtestRunner.js, researchExport.js, tickReplay.js, simulatedMorning.js, new breakoutConfirmation.js,
+breakoutResearch.js, volumeReconcile.js; src/core/kiteHistory.js, tradingDesk.js, openingCollector.js,
+backtestData.js; server/index.js, researchRoutes.js, researchWorker.js; src/OpeningScanner.jsx, ResearchPanel.jsx,
+TradingPanel.jsx, platform/web.js; README.md, CLAUDE.md; tests: new breakHoldStates (9), volumeReconcile (3),
+breakHoldVariants (7) test files, plus updates to breakHold, backtestData, researchRoutes, openingCollector tests.
+**Tests / checks:** npm test (372 pass), npm run build, npx cap sync android. :3002 (backend task restarted, no
+pending orders): simulated replay shows D's states and the later variants, paper trades still ORBUP and MOMO; real
+backtest 14–27 Oct with the D study (9 days: primary 1 signal, full range 3) and Excel 200. The brief's worked
+examples A, B, E, F and G are tests.
+**Not verified:** anything in market hours (D on live ticks, the 09:25:30 judging, recording to 09:40); the volume
+check on real mornings (only one recording, 22 Oct); restoring post-09:20 state after an unrecoverable gap is
+handled by re-reading the recording, not by a per-event state machine.
+**Next:** let D run in shadow and record several mornings, run the volume check, then decide on paper.
+
 ### 2026-10-28: 09:20 system phase 3: strategy D, the 3-minute break and hold (PAPER, shadow by default) (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** the primary strategy of `docs/plan-920-volume-breakout-confirmation.md` (its milestones A and B;
 the later variants in §9 are not built).

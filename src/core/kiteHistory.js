@@ -18,7 +18,7 @@ export const ATR_PERIOD = 14;
 /** 20 completed sessions, the same look-back as the other research comparisons. */
 export const OPENING_VOLUME_DAYS = 20;
 /** Bump when the cached fields change, so older cache entries are fetched again. */
-const HISTORY_VERSION = 4; // 4: per-minute median volume baselines (strategy D)
+const HISTORY_VERSION = 5; // 4: per-minute median volume baselines (strategy D); 5: through 09:24, with means
 const file = (date) => `history/${date}.json`;
 // One formatter, reused: building an Intl.DateTimeFormat per call is slow in backtest loops.
 const IST_HHMM = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -83,17 +83,26 @@ const median = (xs) => {
 /**
  * Strategy D's baselines: over the latest `sessions` complete days before `today` (all five unique
  * 09:15–09:19 minutes), the median opening-window volume and the median volume of each clock minute,
- * each computed directly (the median of totals is not the sum of minute medians). { openingMedian,
- * minuteMedian: [5], sessions, dates } or null.
+ * each computed directly (the median of totals is not the sum of minute medians). The same sessions'
+ * 09:20–09:24 minutes follow (indices 5–9, for the later variants), and the means for comparison.
+ * { openingMedian, minuteMedian: [10], openingMean, minuteMean: [10], sessions, dates } or null.
  */
 export function openingMedians(minuteCandles, today, sessions = OPENING_VOLUME_DAYS) {
   const days = openingWindowDays(minuteCandles, today).sort((a, b) => a.date.localeCompare(b.date)).slice(-sessions);
   if (!days.length) return null;
+  // The later minutes of the same sessions (one row per minute; a duplicate counts once).
+  const later = new Map(days.map((d) => [d.date, [null, null, null, null, null]]));
+  for (const [t, , , , , v] of minuteCandles) {
+    const row = later.get(indiaDate(t));
+    const i = Number(ist(t).slice(3)) - 20;
+    if (row && ist(t).startsWith('09:2') && i >= 0 && i < 5 && row[i] == null) row[i] = v;
+  }
+  const mean = (xs) => { const s = xs.filter(Number.isFinite); return s.length ? s.reduce((a, b) => a + b, 0) / s.length : null; };
+  const perMinute = (fn) => [0, 1, 2, 3, 4].map((i) => fn(days.map((d) => d.minutes[i]))).concat([0, 1, 2, 3, 4].map((i) => fn(days.map((d) => later.get(d.date)[i]))));
   return {
-    openingMedian: median(days.map((d) => d.volume)),
-    minuteMedian: [0, 1, 2, 3, 4].map((i) => median(days.map((d) => d.minutes[i]))),
-    sessions: days.length,
-    dates: days.map((d) => d.date),
+    openingMedian: median(days.map((d) => d.volume)), minuteMedian: perMinute(median),
+    openingMean: mean(days.map((d) => d.volume)), minuteMean: perMinute(mean),
+    sessions: days.length, dates: days.map((d) => d.date),
   };
 }
 
@@ -145,11 +154,11 @@ export function createHistoryService({ store, kite, calendar, now = () => new Da
         out.atr14 = atrFromDayCandles(daily, today);
         out.prevDay = previousDayFromCandles(daily, today);
         const firstOpenDay = days.at(-OPENING_VOLUME_DAYS);
-        const minutes = await call({ token: item.token, interval: 'minute', from: `${firstOpenDay} 09:15:00`, to: `${days.at(-1)} 09:20:00` });
+        const minutes = await call({ token: item.token, interval: 'minute', from: `${firstOpenDay} 09:15:00`, to: `${days.at(-1)} 09:25:00` });
         const ov = openingWindowAverages(minutes, today);
         if (ov) { out.openVol5Avg = ov.volume; out.openValueAvg = ov.value; out.openRangePctAvg = ov.rangePct; out.openVolDays = ov.days; }
         const md = openingMedians(minutes, today);
-        if (md) out.volumeMedians = { openingMedian: md.openingMedian, minuteMedian: md.minuteMedian, sessions: md.sessions };
+        if (md) out.volumeMedians = { openingMedian: md.openingMedian, minuteMedian: md.minuteMedian, openingMean: md.openingMean, minuteMean: md.minuteMean, sessions: md.sessions };
         if (item.futureToken) {
           const fut = await call({ token: item.futureToken, interval: 'day', from: `${days.at(-1)} 00:00:00`, to: `${days.at(-1)} 23:59:59`, oi: true });
           const last = fut.at(-1);

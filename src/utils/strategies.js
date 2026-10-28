@@ -223,13 +223,16 @@ export function breakReference(candles, kind = 'c1c3', minuteMedian = []) {
   return { type: 'C1-C3', label: '09:15–09:18 range', high: Math.max(c1.h, c2.h, c3.h), low: Math.min(c1.l, c2.l, c3.l), startAt: '09:15', frozenAt: '09:18' };
 }
 
-export function breakAndHold(f, cfg = DEFAULT_STRATEGY_SETTINGS.breakHold, { reference: refKind = 'c1c3' } = {}) {
+export function breakAndHold(f, cfg = DEFAULT_STRATEGY_SETTINGS.breakHold, { reference: refKind = 'c1c3', statistic = 'median', skip = [] } = {}) {
   const { check, result } = make('breakHold');
   const hash = settingsHash(cfg);
   const dataMode = noBook(f) ? 'historical 1-minute OHLC (candle backtest)' : 'sampled prices (Kite WebSocket ticks)';
   const done = (fields) => {
     const r = result(fields);
-    const failed = r.checks.filter((c) => !c.ok);
+    // Research ablations may leave checks out; they stay listed, marked skipped.
+    for (const c of r.checks) if (skip.includes(c.key)) c.skipped = true;
+    if (skip.length) r.pass = Boolean(r.applies && r.signal && r.checks.every((c) => c.ok || c.skipped));
+    const failed = r.checks.filter((c) => !c.ok && !c.skipped);
     const patternFail = failed.find((c) => !EXECUTION_KEYS.has(c.key));
     const blocker = failed.find((c) => EXECUTION_KEYS.has(c.key));
     let state = fields.state ?? null;
@@ -320,7 +323,9 @@ export function breakAndHold(f, cfg = DEFAULT_STRATEGY_SETTINGS.breakHold, { ref
   check.book(f, 'freshness', 'Fresh quote and trade', q.lastTickAgeSec != null && q.lastTickAgeSec <= cfg.maxQuoteAgeSec && (q.lastTradeAgeSec == null || q.lastTradeAgeSec <= cfg.maxQuoteAgeSec),
     `last tick ${q.lastTickAgeSec ?? 'n/a'} s, last trade ${q.lastTradeAgeSec ?? 'n/a'} s before 09:20 (max ${cfg.maxQuoteAgeSec})`);
 
-  const vb = f.volumeBaselines;
+  const vb = statistic === 'mean' && f.volumeBaselines
+    ? { ...f.volumeBaselines, openingMedian: f.volumeBaselines.openingMean, minuteMedian: f.volumeBaselines.minuteMean ?? [] }
+    : f.volumeBaselines;
   const histOk = Boolean(vb && vb.sessions >= cfg.minBaselineSessions && vb.openingMedian > 0 && vb.minuteMedian?.[3] > 0);
   check('history', 'Volume history', histOk, vb ? `${vb.sessions} earlier sessions (min ${cfg.minBaselineSessions}), median opening volume ${vb.openingMedian ?? 'n/a'}` : 'no median volume baselines');
   // Breakout volume on its conservative lower bound: increments straddling the 09:18 boundary may belong to 09:17.

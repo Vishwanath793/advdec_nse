@@ -177,7 +177,9 @@ test('median baselines: each clock minute and the opening total directly, unique
   ];
   const m = openingMedians(candles, '2026-10-19');
   assert.equal(m.sessions, 3);
-  assert.deepEqual(m.minuteMedian, [200, 200, 200, 200, 200]);
+  assert.deepEqual(m.minuteMedian.slice(0, 5), [200, 200, 200, 200, 200]);
+  assert.deepEqual(m.minuteMedian.slice(5), [null, null, null, null, null]); // no 09:20–09:24 bars here: missing, not zero
+  assert.equal(m.openingMean, 1100); // (1500 + 700 + 1100) / 3: the mean is kept apart from the median
   assert.equal(m.openingMedian, 1100); // totals 1500, 700, 1100: not the sum of the minute medians (1000)
   assert.deepEqual(m.dates, ['2026-10-13', '2026-10-14', '2026-10-15']);
   assert.equal(openingMedians(candles, '2026-10-19', 2).sessions, 2);

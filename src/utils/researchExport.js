@@ -59,6 +59,27 @@ export function backtestSheets(r) {
     { name: 'Trades', rows: [TRADE_HEADERS, ...r.trades.map(tradeCells)] },
     { name: 'Not filled', rows: [['Date', 'Symbol', 'Strategy', 'Status', 'Reason'], ...r.notFilled.map((t) => [t.date, t.symbol, t.strategy, t.status, t.reason])] },
     { name: 'Settings', rows: settingsRows(r.settings) },
+    ...(r.dResearch ? dResearchSheets(r.dResearch) : []),
+  ];
+}
+
+/** Strategy D's study (utils/breakoutResearch.js): pattern outcomes, sensitivities, the development/test split. */
+function dResearchSheets(d) {
+  const sp = d.split ?? {};
+  return [
+    {
+      name: 'D pattern study',
+      rows: [['Row', 'Signals', 'Wins (+1R first)', 'Losses (−1R first)', 'Ambiguous', 'Expired', 'Win share (decided)', 'Long', 'Short', 'Avg MFE R', 'Avg MAE R', 'Back in range ≤5 min', 'Delay min'],
+        ...d.table.map((x) => [x.label, x.signals, x.wins, x.losses, x.ambiguous, x.expired, x.winShare, `${x.long.wins}/${x.long.signals}`, `${x.short.wins}/${x.short.signals}`, x.avgMfeR, x.avgMaeR, x.returnToRange, x.avgDelayMin])],
+    },
+    { name: 'D sensitivity', rows: [['Parameter', 'Value', ...SUMMARY_HEADERS], ...d.sweeps.flatMap((sw) => sw.values.map((x) => [sw.label, x.value, ...summaryCells(x.summary)]))] },
+    {
+      name: 'D split',
+      rows: sp.skipped ? [['Split'], [sp.skipped]] : [['Part', 'Days', ...SUMMARY_HEADERS, 'Net per session', '95% low', '95% high'],
+        ['Development', sp.devDays, ...summaryCells(sp.dev), sp.devSessions.meanPerSession, sp.devSessions.low, sp.devSessions.high],
+        ['Untouched test', sp.testDays, ...summaryCells(sp.test), sp.testSessions.meanPerSession, sp.testSessions.low, sp.testSessions.high], [sp.rule]],
+    },
+    { name: 'D signals', rows: [['Row', 'Date', 'Symbol', 'Side', 'Entry at', 'Entry', 'R', 'Outcome', 'MFE R', 'MAE R', 'Back in range'], ...d.signals.map((s) => [s.key, s.date, s.symbol, s.direction > 0 ? 'LONG' : 'SHORT', s.entryAt, s.entry, s.R, s.outcome, s.mfeR, s.maeR, s.returnedToRange ? 'yes' : 'no'])] },
   ];
 }
 

@@ -123,8 +123,43 @@ function BacktestResult({ r }) {
           </>
         )}
       </div>
+      <BreakHoldResearch d={r.dResearch} />
       <Trades trades={r.trades} notFilled={r.notFilled} />
     </>
+  );
+}
+
+/** Strategy D's study (§15): outcomes from the first executable price after confirmation, sensitivities, split. */
+function BreakHoldResearch({ d }) {
+  if (!d) return null;
+  const sp = d.split ?? {};
+  return (
+    <div className="ai-section">
+      <h4>Strategy D study: does +1R come before −1R within {d.study.horizonMin} minutes of the first executable price?</h4>
+      <div className="table-wrap">
+        <table className="research-table">
+          <thead><tr><th>Row</th><th>Signals</th><th>+1R first</th><th>−1R first</th><th>Ambiguous</th><th>Expired</th><th>Win share</th><th>Long</th><th>Short</th><th>MFE R</th><th>MAE R</th><th>Back in range ≤{d.study.returnToRangeMin} min</th></tr></thead>
+          <tbody>
+            {d.table.map((x) => (
+              <tr key={x.key}><td>{x.label}</td><td>{x.signals}</td><td>{x.wins}</td><td>{x.losses}</td><td>{x.ambiguous}</td><td>{x.expired}</td><td>{pctTxt(x.winShare)}</td>
+                <td>{x.long.wins}/{x.long.signals}</td><td>{x.short.wins}/{x.short.signals}</td><td>{f2(x.avgMfeR)}</td><td>{f2(x.avgMaeR)}</td><td>{pctTxt(x.returnToRange)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="hint">Ambiguous: one minute reached both +1R and −1R (the order inside a candle is unknown). Win share counts decided signals only.</p>
+      <h4>D alone, trading study: predeclared ranges (look for stability, not the best value)</h4>
+      <StatTable first={['Parameter', 'Value']} rows={d.sweeps.flatMap((sw) => sw.values.map((x) => ({ key: `${sw.key}-${x.value}`, cells: [sw.label, x.value], s: x.summary })))} />
+      {sp.skipped ? <p className="hint">Development/test split: {sp.skipped}.</p> : (
+        <>
+          <StatTable first={['Part', 'Days']} rows={[{ key: 'dev', cells: ['Development', sp.devDays], s: sp.dev }, { key: 'test', cells: ['Untouched test', sp.testDays], s: sp.test }]} />
+          <p className="hint">
+            {sp.rule}. Net per session: development {rs(sp.devSessions.meanPerSession)} ({rs(sp.devSessions.low)} to {rs(sp.devSessions.high)}),
+            test {rs(sp.testSessions.meanPerSession)} ({rs(sp.testSessions.low)} to {rs(sp.testSessions.high)}), 95% across sessions. {d.note}
+          </p>
+        </>
+      )}
+    </div>
   );
 }
 

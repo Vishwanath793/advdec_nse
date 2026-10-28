@@ -43,13 +43,13 @@ execution is milestone 4 and doesn't exist yet.
    watchlist, NIFTY 50, NIFTY BANK, matching sector indices, near-month futures of F&O stocks), instrument tokens
    from that day's Kite dump, ATR(14) and the average 09:15–09:20 volume from Kite historical candles (3 requests a
    second), and a `/quote` check of circuit limits and previous closes. It connects at **09:14**, seals at
-   **09:20:00** (+1.5 s for ticks still in flight) and disconnects at 09:30.
+   **09:20:00** (+1.5 s for ticks still in flight), keeps recording until 09:40 and disconnects at 09:41.
 
 ### What is recorded
 
 - `.data/instruments/YYYY-MM-DD.json`: that day's tokens, tick and lot sizes, near-month futures.
 - `.data/history/YYYY-MM-DD.json`: ATR(14), average opening volume, futures' previous OI.
-- `.data/ticks/YYYY-MM-DD.ndjson.gz`: every tick 09:14–09:25 with the local receipt time and the exchange
+- `.data/ticks/YYYY-MM-DD.ndjson.gz`: every tick 09:14–09:40 (09:25 before 29 Oct 2026) with the local receipt time and the exchange
   timestamp, including five-level depth. Kite has no depth history, so this recording is the only source of depth
   data for research.
 - `.data/opening/YYYY-MM-DD.json`: the sealed 09:20 features; `…-universe.json`: what was subscribed and why.
@@ -134,7 +134,7 @@ setups fail the after-cost reward/risk check. That is deliberate.
   the bid (ask) minus slippage, which can be worse than the stop price. Square-off at 15:10.
 - **Kill switch** (Orders tab): cancels pending entries, closes open positions at the bid/ask, blocks new trades.
   **Square off all** closes everything now.
-- Open paper positions keep a WebSocket connection to their stocks after 09:30, until they close.
+- Open paper positions keep a WebSocket connection to their stocks after 09:41, until they close.
 
 None of this means a real stop or target would fill at the same price, and nothing here says the strategies make
 money: they are hypotheses to test on recorded mornings (milestone 3).
@@ -158,6 +158,29 @@ you checked them); and the opening universe (minimum 09:10 gap, watchlist, futur
 above. **Restore the defaults** puts them back. A factor switched off still shows its reading in the candidate
 detail, marked "not scored".
 
+### Strategy D: 3-minute break and hold
+
+From `docs/plan-920-volume-breakout-confirmation.md`. The 09:15–09:18 range is frozen with a buffer; 09:18 must break
+it with a strong candle on at least 1.5× its usual same-minute volume (median of 20 sessions; at least 15 needed),
+and 09:19 must hold beyond the level. D is gated, not scored, and has its own ranking (reward/risk to target 1, then
+09:18 RVOL capped at 3, then spread). The scanner shows its **pattern state** (CONFIRMED, WAIT, INVALIDATED,
+DATA_INSUFFICIENT…), the reason code, the main blocker and the next event, separately from the BUY/SELL/NO TRADE
+decision. On live ticks it also needs: no estimated volume start, no resets, a tick within 5 s of each minute's end,
+no gap over 10 s, a quote and trade under 5 s old; the 09:18 volume is judged on its conservative lower bound.
+
+- **Shadow by default** (shown, never traded). In paper mode it still waits for the **volume check** (Report card →
+  Research → *Check D's volumes against Kite*): recorded tick volumes per minute must match Kite's 1-minute bars
+  (±5%, 30+ stock-days, 3+ mornings). Until then D's paper decisions are DATA_INSUFFICIENT; Settings can switch
+  that requirement off.
+- Paper entries are rechecked on every tick: back inside the level cancels; a missing, crossed or wide book, a stale
+  trade or the wrong side of VWAP means no fill; no entry beyond half the structural risk past the level or after 09:21.
+- **Later variants** (shadow only, judged at 09:25:30 from the recording): the full five-minute range (earliest
+  09:22), a retest of the 3-minute level, and the 09:15-candle and highest-RVOL-candle references.
+- **Research**: every candle backtest adds D's study: +1R before −1R within 15 minutes of the first executable
+  price (ambiguous minutes counted apart), MFE/MAE, return to the range, for D, its ablations (volume-only, no volume
+  gates, two-bar hold, mean baselines) and the variants; predeclared sensitivities; 60 development sessions then 20
+  untouched (up to 80 days a run).
+
 ### Research: backtests and tick replay (milestone 3)
 
 On the **Report card** tab, under the report, the **Research** section (badge **BACKTEST**: nothing is traded). The
@@ -173,7 +196,7 @@ backend runs one job at a time in the background (a worker thread), never 08:55�
   days only), with breakdowns by strategy, gap, RVOL, sector and Nifty regime, slippage sensitivity, parameter
   ranges, a 70/30 out-of-sample split and a 4-fold walk-forward.
 - **Tick replay**: the mornings the collector recorded (`.data/ticks/`), through the same window, decision and paper
-  ledger as live: the only test of the order-book rules. Recordings end at 09:25, so what's still open then closes
+  ledger as live: the only test of the order-book rules. Recordings end at 09:40 (09:25 before 29 Oct 2026), so what's still open then closes
   at the last recorded bid/ask.
 - **Settings for this run** override the score and strategy thresholds for that run only (never saved).
 - **Export to Excel**: every table, the trades, the limitations and the settings used.

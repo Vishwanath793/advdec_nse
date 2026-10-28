@@ -15,7 +15,8 @@ import { indexInstruments } from '../utils/confirmation.js';
  *   09:14:00                          connect the Kite WebSocket (full mode)
  *   09:15:00–09:19:59.999             ticks feed the opening window and the recording
  *   09:20:00 (+ SEAL_GRACE_MS)        seal: features frozen and saved
- *   STOP_AT (09:30)                   disconnect
+ *   RECORD_UNTIL (09:40)              ticks recorded until then
+ *   STOP_AT (09:41)                   disconnect
  * The grace admits ticks stamped before 09:20:00 that are still in flight; ticks
  * stamped 09:20:00 or later never count (see utils/openingWindow.js).
  *
@@ -24,8 +25,9 @@ import { indexInstruments } from '../utils/confirmation.js';
  */
 
 export const CONNECT_AT = '09:14';
-export const STOP_AT = '09:30';
-export const RECORD_UNTIL = '09:25';
+// Recording runs to 09:40 (strategy D's later variants and its 15-minute outcome study need the bars after 09:20).
+export const STOP_AT = '09:41';
+export const RECORD_UNTIL = '09:40';
 export const SEAL_GRACE_MS = 1_500;
 export const PUBLISH_EVERY_MS = 1_000;
 export const DEFAULT_COLLECTOR_SETTINGS = { minGapPct: 0.5, watchlist: [], includeFutures: true };

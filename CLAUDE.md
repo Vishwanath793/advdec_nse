@@ -160,8 +160,8 @@ Read-only data collection; no orders.
   - prepare after the 09:10 import: universe, tokens, `/quote` check of circuit limits and previous close, history
   - connect at 09:14
   - seal at 09:20:00 + 1.5 s
-  - record ticks until 09:25
-  - stop at 09:30
+  - record ticks until 09:40 (09:25 before 29 Oct 2026: strategy D's later variants and outcome study need more)
+  - stop at 09:41
 
   On a restart:
   - after the seal, the day is loaded from disk and never collected again

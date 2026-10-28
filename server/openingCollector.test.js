@@ -93,7 +93,7 @@ test('holidays and unknown calendar years fail closed; no Kite session asks for 
   assert.equal((await h.collector.prepare()).phase, 'needs-kite');
 });
 
-test('a full morning: prepare, connect at 09:14, collect, seal at 09:20, record to 09:25, stop at 09:30', async () => {
+test('a full morning: prepare, connect at 09:14, collect, seal at 09:20, record to 09:40, stop at 09:41', async () => {
   const h = harness();
   h.collector.setSession({ apiKey: 'k12345', accessToken: 'tok12345' });
   const st = await h.collector.wake();
@@ -133,10 +133,11 @@ test('a full morning: prepare, connect at 09:14, collect, seal at 09:20, record 
   assert.equal(lastUpdate.rows.find((r) => r.symbol === 'AAA').ret5Pct.toFixed(3), (((102.4 - 101.5) / 101.5) * 100).toFixed(3));
 
   await send('09:24:00', [tk(11, '09:24:00', 103, 30_000)]);
-  await send('09:26:00', [tk(11, '09:26:00', 103, 31_000)]); // after the recording window
-  assert.equal(h.logged.filter((x) => x !== 'closed').length, 6); // 09:14:30 … 09:24:00, not 09:26
+  await send('09:39:00', [tk(11, '09:39:00', 103, 31_000)]);
+  await send('09:40:30', [tk(11, '09:40:30', 103, 32_000)]); // after the recording window
+  assert.equal(h.logged.filter((x) => x !== 'closed').length, 7); // 09:14:30 … 09:39:00, not 09:40:30
   assert.ok(h.logged.every((x) => x === 'closed' || (x.r && x.exchangeTime))); // both clocks kept
-  await h.advanceTo('09:30:00');
+  await h.advanceTo('09:41:00');
   assert.equal(ws.readyState, 3);
   assert.equal(h.logged.at(-1), 'closed');
 });
@@ -227,7 +228,7 @@ test('a replay hands the seal and the later ticks to the trading desk (replay le
   assert.equal(files.size, 0);
 });
 
-test('live day: the desk gets the seal and later ticks; open paper positions keep streaming after 09:30', async () => {
+test('live day: the desk gets the seal and later ticks; open paper positions keep streaming after 09:41', async () => {
   const seen = { sealed: null, ticks: [] };
   const trading = {
     onSeal: async (s, o) => { seen.sealed = { date: s.date, ...o }; },
@@ -245,9 +246,9 @@ test('live day: the desk gets the seal and later ticks; open paper positions kee
   await h.advanceTo(ist('09:21:00'));
   ws.onmessage({ data: encodeTickerMessage([{ token: 11, ltp: 103, volume: 5, avgPrice: 103, buyQty: 1, sellQty: 1, open: 101, high: 103, low: 101, close: 100, exchangeTime: ist('09:21:00') }]).buffer });
   assert.deepEqual(seen.ticks, [11]);
-  await h.advanceTo(ist('09:30:00') - 1);
+  await h.advanceTo(ist('09:41:00') - 1);
   const before = h.sockets.length; // the main ticker may have reconnected while the market was quiet
-  await h.advanceTo('09:30:00');
+  await h.advanceTo('09:41:00');
   assert.ok(h.sockets.slice(0, before).every((x) => x.readyState === 3), 'the main connection is closed');
   assert.equal(h.sockets.length, before + 1, 'a new connection follows the open position');
   const follow = h.sockets.at(-1);

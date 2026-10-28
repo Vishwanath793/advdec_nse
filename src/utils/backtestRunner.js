@@ -5,6 +5,7 @@ import { cleanRiskSettings } from './risk.js';
 import { strategySettings } from './strategies.js';
 import { openingRejections } from './confirmation.js';
 import { buildTradePlan } from './tradePlan.js';
+import { breakHoldResearch } from './breakoutResearch.js';
 import {
   breakdown, gapBucket, GAP_BUCKETS, regimeOf, REGIMES, rvolBucket, RVOL_BUCKETS, summarize,
 } from './backtestStats.js';
@@ -158,7 +159,7 @@ function walkForward(prepared, settings) {
 /** Everything the research page shows. `onProgress(done, total)` is called between runs. */
 export function runBacktest(days, settings = {}, { onProgress = () => {} } = {}) {
   const prepared = days.map(dayFeatures);
-  const total = VARIANTS.length + SLIPPAGE_STEPS.length + SWEEPS.reduce((n, x) => n + x.values.length, 0) + 2;
+  const total = VARIANTS.length + SLIPPAGE_STEPS.length + SWEEPS.reduce((n, x) => n + x.values.length, 0) + 3;
   let done = 0;
   const tick = () => { done += 1; onProgress(done, total); };
 
@@ -186,6 +187,9 @@ export function runBacktest(days, settings = {}, { onProgress = () => {} } = {})
   tick();
   const wf = walkForward(prepared, settings);
   tick();
+  // Strategy D's own study (§15): pattern outcomes for it, its ablations and later variants; its sensitivities and split.
+  const dResearch = breakHoldResearch(prepared, settingsOf(settings), (days, s) => runVariant(days, 'breakHold', s));
+  tick();
 
   return {
     days: prepared.length,
@@ -201,7 +205,7 @@ export function runBacktest(days, settings = {}, { onProgress = () => {} } = {})
       sector: breakdown(combined, (t) => t.sector),
       regime: breakdown(combined, (t) => t.regime, REGIMES),
     },
-    slippage, sweeps, oos, walkForward: wf,
+    slippage, sweeps, oos, walkForward: wf, dResearch,
     trades: combined.filter((t) => t.status === 'CLOSED').map((t) => ({
       date: t.date, symbol: t.symbol, strategy: t.strategy, side: t.side, score: t.score, qty: t.qty, entry: t.entry, entryAt: t.entryAt,
       exits: t.exits, outcome: t.outcome, gross: t.gross, charges: t.charges, net: t.net, r: t.r != null ? Math.round(t.r * 100) / 100 : null,

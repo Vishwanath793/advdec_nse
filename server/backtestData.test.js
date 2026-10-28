@@ -157,7 +157,10 @@ test('loadDays: gapped stocks with tokens, candles, the RVOL baseline from earli
   assert.equal(aaa.meta.convictionScore, 81);
   assert.equal(aaa.meta.token, 11);
   assert.equal(aaa.meta.openVol5Avg, 5_000); // five 1,000-volume candles on each earlier day; never the tested day's 10,000s
-  assert.deepEqual(aaa.meta.volumeMedians, { openingMedian: 5_000, minuteMedian: [1_000, 1_000, 1_000, 1_000, 1_000], sessions: 20 });
+  const later = [1_000, 1_000, null, null, null]; // 09:20 and 09:21 bars exist in this fixture; 09:22–09:24 don't
+  assert.deepEqual(aaa.meta.volumeMedians, {
+    openingMedian: 5_000, minuteMedian: [1_000, 1_000, 1_000, 1_000, 1_000, ...later], openingMean: 5_000, minuteMean: [1_000, 1_000, 1_000, 1_000, 1_000, ...later], sessions: 20,
+  });
   assert.ok(aaa.candles[0][0] instanceof Date);
   assert.ok(day.indices['NIFTY 50'].length > 0 && day.indices['NIFTY IT'].length > 0);
   assert.ok(r.requests >= 4); // AAA, plus three indices
