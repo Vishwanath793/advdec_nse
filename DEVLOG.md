@@ -65,9 +65,18 @@ today wasn't armed. Three problems showed:
 
 **Tests / checks:** npm test (321 pass, 4 new), npm run build, npx cap sync android.
 
+**Browser check (the owner asked for the restart):**
+- Restarted :3002 at 09:58 IST; no scheduled order was pending.
+- These warnings show:
+  - the Orders card's "Not armed today";
+  - the order form's red warning, which follows the chosen date ("Not armed for 2026-10-29");
+  - the summary's "+ LIVE gap exits".
+- No console errors.
+
 **Not verified:**
-- **Not checked in the browser, and the backend was not restarted.** At 09:52 IST, during market hours, a backend
-  (PID 48736, not started by this session) was running on :3002. It still runs the old code until restarted.
+- **The opted-in tag in a real scheduled order.** Scheduling a test order (BUY 1 SAIL, 29 Oct, opted in) was blocked
+  by the session's safety check. Nothing was scheduled. The tag is covered by the tests only.
+- After the restart the backend had no Kite session until the owner's app page re-shares it (reload the page).
 - Fetching Kite history for one late stock hasn't run against Kite.
 
 ### 2026-10-27: 9:15 gap entry phase 2: LIVE gap exits for opted-in scheduled 09:15 orders; phase-1 gaps closed (Claude Code for vinayakb374, android-app, local commits)
