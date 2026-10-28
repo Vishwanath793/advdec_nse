@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './platform/index.js';
-import { STRATEGY_FIELDS, STRATEGY_LABELS } from './TradingPanel.jsx';
+import { STRATEGY_FIELDS, STRATEGY_LABELS, StrategyExtras } from './TradingPanel.jsx';
 import { indiaDate } from './core/calendar.js';
 
 /**
@@ -159,6 +159,7 @@ function Overrides({ o, set }) {
           <h4><label><input type="checkbox" checked={o.strategies[g].enabled} onChange={(e) => strat(g, 'enabled', e.target.checked)} /> {STRATEGY_LABELS[g]}</label></h4>
           <div className="trading-grid">
             {fields.map(([k, label]) => <label key={k} className="field-inline">{label}<input type="number" step="any" value={o.strategies[g][k]} onChange={(e) => strat(g, k, e.target.value)} /></label>)}
+            <StrategyExtras cfg={o.strategies[g]} set={(k, v) => strat(g, k, v)} />
           </div>
         </div>
       ) : null))}

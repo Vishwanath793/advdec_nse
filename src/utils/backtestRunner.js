@@ -24,6 +24,7 @@ export const VARIANTS = [
   { key: 'orb', label: 'A. Opening-range breakout only' },
   { key: 'gapPullback', label: 'B. Gap-up pullback recovery only' },
   { key: 'momentum', label: 'C. Opening momentum only' },
+  { key: 'breakHold', label: 'D. 3-minute break and hold only (shadow or not)' },
   { key: 'baseline', label: 'Simple opening-range baseline (no filters, 1R/2R)' },
   { key: 'conviction', label: '09:10 pre-open conviction alone (recorded days only)' },
 ];
@@ -36,6 +37,7 @@ export const SWEEPS = [
 export const WALK_FORWARD = { folds: 4, choose: 'minScore', values: [60, 70, 80], minTrades: 10 };
 
 export const LIMITATIONS = [
+  'Strategy D on candles: the buffer is a proxy (two ticks or 5% of the 09:15–09:18 range; no spread history), VWAP is computed from the candles, and the 09:18 minute\'s volume is compared with the median of the same minute on earlier days. In the combined row D trades only when it is switched to paper; the D-only row always trades it.',
   'Minute candles can\'t reproduce exact intraminute fills or order-book behaviour: every ambiguity is resolved against the trade (stop before target, worse of trigger and open, slippage on every market-type fill).',
   'There is no order-book history in Kite: depth, spread and imbalance checks are "not tested" here. Only recorded mornings (tick replay) test them.',
   'F&O open interest and circuit limits are not used in candle backtests.',
@@ -49,7 +51,10 @@ const settingsOf = (input = {}) => ({
   strategies: strategySettings(input.strategies ?? {}),
   scoring: cleanScoringSettings(input.scoring ?? {}),
 });
-const only = (s, key) => ({ ...s, strategies: Object.fromEntries(Object.entries(s.strategies).map(([k, v]) => [k, { ...v, enabled: k === key }])) });
+const only = (s, key) => ({
+  ...s,
+  strategies: Object.fromEntries(Object.entries(s.strategies).map(([k, v]) => [k, { ...v, enabled: k === key, ...(k === 'breakHold' && k === key ? { mode: 'paper' } : {}) }])),
+});
 const withSlippage = (s, bps) => ({ ...s, risk: { ...s.risk, slippageBps: bps } });
 
 /** One day's features from its candles (built once, reused by every variant). */

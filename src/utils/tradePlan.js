@@ -64,12 +64,20 @@ export function buildTradePlan(signal, features, riskSettings, { availableMargin
   const netRisk = qty * riskPerShare + stopCosts.total;
   const rewardRisk = netRisk > 0 ? netReward / netRisk : null;
   if (rewardRisk != null && rewardRisk < s.minRewardRisk) reasons.push(`reward/risk after costs ${rewardRisk.toFixed(2)} is below ${s.minRewardRisk}`);
+  // Some strategies also need the whole position's net reward to target 1 alone to justify the risk.
+  let firstTargetRR = null;
+  if (signal.minFirstTargetRR != null && qty) {
+    const t1Costs = roundTripCharges({ side: up ? 'BUY' : 'SELL', qty, entry: expectedEntry, exit: target1 }, s.charges);
+    firstTargetRR = netRisk > 0 ? (qty * rewardPerShare1 - t1Costs.total) / netRisk : null;
+    if (firstTargetRR != null && firstTargetRR < signal.minFirstTargetRR) reasons.push(`reward/risk to target 1 after costs ${firstTargetRR.toFixed(2)} is below ${signal.minFirstTargetRR}`);
+  }
 
   return {
     side: up ? 'BUY' : 'SELL', direction: signal.direction, immediate: Boolean(signal.immediate),
     trigger, expectedEntry, maxEntry, stop, target1, target2,
     riskPerShare: r2(riskPerShare), qty, firstExitQty: half, riskAmount: r2(netRisk), notional: r2(qty * expectedEntry),
     grossReward: r2(grossReward), costs, netReward: r2(netReward), rewardRisk: rewardRisk != null ? r2(rewardRisk) : null,
+    firstTargetRR: firstTargetRR != null ? r2(firstTargetRR) : null, entryDeadline: signal.entryDeadline ?? null,
     slippageBps: s.slippageBps, maxSlippageBps: s.maxSlippageBps, tick, chargeRates: s.charges,
     ok: reasons.length === 0, reasons,
   };

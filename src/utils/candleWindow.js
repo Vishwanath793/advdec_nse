@@ -73,11 +73,12 @@ export function candleFeatures(meta, candles, market = {}) {
   let pv = 0;
   let vol = 0;
   const vwapSides = [];
-  for (const c of w) {
+  const minuteVwap = [null, null, null, null, null];
+  for (const [i, c] of w.entries()) {
     if (!c) continue;
     pv += ((c[2] + c[3] + c[4]) / 3) * c[5];
     vol += c[5];
-    if (vol) vwapSides.push(Math.sign(c[4] - pv / vol));
+    if (vol) { vwapSides.push(Math.sign(c[4] - pv / vol)); minuteVwap[i] = pv / vol; }
   }
   const vwap = vol ? pv / vol : null;
   const crosses = vwapSides.filter((x, i, a) => i > 0 && x !== 0 && a[i - 1] !== 0 && x !== a[i - 1]).length;
@@ -102,6 +103,9 @@ export function candleFeatures(meta, candles, market = {}) {
     lowerWickPct: range > 0 ? ((Math.min(open, ltp) - orLow) / range) * 100 : null,
     minuteReturns, last2MinPct: pct(ltp, close2Ago),
     windowVolume, minuteVolume, volumePerMinute: windowVolume / 5,
+    // Strategy D: median baselines from earlier days' candles; VWAP as of each minute; no book, so no reference spread.
+    volumeBaselines: meta.volumeMedians ? { ...meta.volumeMedians, source: 'Kite 1-minute candles, earlier sessions (median)' } : null,
+    minuteVwap, spreadRef: null,
     rvol: meta.openVol5Avg ? windowVolume / meta.openVol5Avg : null,
     volAccel: firstRate > 0 ? lastRate / firstRate : null,
     avgVolume20: null,
@@ -109,7 +113,7 @@ export function candleFeatures(meta, candles, market = {}) {
     vwapDistPct: pct(ltp, vwap), vwapCrosses: crosses,
     vwapReclaim: vwapSides.length > 1 ? vwapSides.slice(0, -1).some((x) => x < 0) && vwapSides.at(-1) > 0 : null,
     vwapReject: vwapSides.length > 1 ? vwapSides.slice(0, -1).some((x) => x > 0) && vwapSides.at(-1) < 0 : null,
-    distPrevHighPct: pct(ltp, meta.prevHigh), distPrevLowPct: pct(ltp, meta.prevLow),
+    prevHigh: meta.prevHigh ?? null, prevLow: meta.prevLow ?? null, distPrevHighPct: pct(ltp, meta.prevHigh), distPrevLowPct: pct(ltp, meta.prevLow),
     atr14: meta.atr14 ?? null, orRangeAtr: meta.atr14 ? range / meta.atr14 : null,
     upperCircuit: null, lowerCircuit: null, // not in historical data
     totalBuyQty: null, totalSellQty: null,

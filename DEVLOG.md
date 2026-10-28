@@ -22,7 +22,6 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 
 | Who (name / account) | Branch | What | Started | Files / areas touched |
 |---|---|---|---|---|
-| Claude Code for vinayakb374 (DELL), taken over from Vishwanath793's paused line with the owner's OK | android-app | Phase 1: every 09:20 factor adjustable (strategies, score weights per factor, tiers, scoring curves, universe, execution window, charges). Phase 2: milestone 3 part 2 (historical candle download + cache, research routes, Research section on the Report card, Excel export). Phase 3: strategy D, the 3-minute break and hold from docs/plan-920-volume-breakout-confirmation.md (PAPER). Stops before LIVE. | 2026-10-28 | src/utils/strategies.js, confirmation.js, decision.js, risk.js, charges.js; src/core/tradingDesk.js, openingCollector.js, backtestData.js; server/researchRoutes.js, tradingRoutes.js, index.js; src/TradingPanel.jsx, ReportCardPage.jsx, new ResearchPanel.jsx; src/platform/web.js; tests |
 ---
 
 ## Entry template
@@ -39,6 +38,41 @@ research, and so on) are in [CLAUDE.md](CLAUDE.md) §2. They apply to everyone.
 ---
 
 ## Entries (newest first)
+
+### 2026-10-28: 09:20 system phase 3: strategy D, the 3-minute break and hold (PAPER, shadow by default) (Claude Code for vinayakb374, android-app, local commit)
+**What changed:** the primary strategy of `docs/plan-920-volume-breakout-confirmation.md` (its milestones A and B;
+the later variants in §9 are not built).
+- `breakAndHold` in `strategies.js`: the 09:15–09:18 range (C1–C3) frozen with a buffer b = max(2 ticks, the
+  reference spread, 5% of the range); C4 must open inside and close beyond the level with body ≥ 0.6, close location
+  ≥ 0.75 and ≥ 1.5× the median volume of the same minute; C5 closes beyond again and retests no deeper than b;
+  C4, C5 and the live price on the right side of VWAP; opening RVOL (median) ≥ 1.5; spread ≤ 15 bps; entry at the
+  ask/bid no more than 0.5× the structural risk past the level, by 09:21; stop below the C4/C5 lows less b; target 1
+  = 2R capped before the previous-day high/low or circuit; net reward/risk to target 1 ≥ 1.5 (new optional check in
+  `tradePlan.js`). Every result has a reason code (CONFIRMED, NO_BREAKOUT_CLOSE, WEAK_BREAKOUT_VOLUME,
+  WEAK_BREAKOUT_CANDLE, HOLD_NOT_CONFIRMED, HOLD_TOO_DEEP, INSUFFICIENT_VOLUME_HISTORY, WAIT, OUTSIDE_PRIMARY,
+  EXTENDED_ENTRY, OBSTACLE_TOO_CLOSE, …) and the C1–C3 high-volume candle as context.
+- **Shadow by default**: evaluated and shown (candidate detail: "confirmed (shadow mode)" and the code), never
+  traded, because the brief makes paper trading wait for the live-vs-historical opening-volume reconciliation (§5.2).
+  Settings → D → Mode → Paper trades it.
+- Data: `openingMedians` in `kiteHistory.js` (median opening volume and per-minute medians over 20 sessions,
+  unique minutes; HISTORY_VERSION 4, so tomorrow's 09:10 preparation refetches history once); the window adds
+  `minuteVwap`, `spreadRef` (median ₹ spread 09:17:30–09:18) and `volumeBaselines`; the candle window and the
+  backtest loader do the same (the loader's baseline is now 20 days, as live).
+- Paper orders expire at the earlier of the global cutoff and the plan's `entryDeadline`; candle fills too.
+- Research: a "D alone" variant (always traded; the combined row respects shadow), its limitation listed.
+- Settings and research overrides: all D's numbers, its mode and deadline (`StrategyExtras`).
+**Files:** src/utils/strategies.js, decision.js, tradePlan.js, paperLedger.js, candleFills.js, candleWindow.js,
+openingWindow.js, backtestRunner.js; src/core/kiteHistory.js, openingCollector.js, backtestData.js, tradingDesk.js;
+src/TradingPanel.jsx, ResearchPanel.jsx, OpeningScanner.jsx; new server/breakHold.test.js (11 tests, in the test
+script); server/backtestData.test.js.
+**Tests / checks:** npm test (352 pass), npm run build, npx cap sync android. Real backtest 14–27 Oct, 5 stocks a
+day, rerun with 20 baseline days (29 Kite requests): D alone took no trades in that tiny sample; the other rows
+are unchanged.
+**Not verified:** D on live ticks (no market morning since); the reconciliation the brief requires before paper
+(§5.2: cumulative-volume differences vs Kite's later minute bars on several mornings); the post-09:20 variants
+(full five-minute range, retest) are not built.
+**Next:** stop here, before LIVE (milestone 4), as agreed. Run D in shadow for some mornings, reconcile the
+volumes, then decide on paper.
 
 ### 2026-10-28: 09:20 system phase 2: milestone 3 part 2, research data, routes, UI, export (Claude Code for vinayakb374, android-app, local commit)
 **What changed:** Vishwanath793's paused milestone 3 part 2, taken over with the owner's OK, finished.

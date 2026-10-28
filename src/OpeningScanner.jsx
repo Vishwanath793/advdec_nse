@@ -250,7 +250,8 @@ function DecisionDetail({ x }) {
         <summary>Strategy checks</summary>
         {x.strategies.map((s) => (
           <div key={s.strategy}>
-            <strong>{s.label}</strong>: {s.applies ? (s.pass ? 'setup valid' : 'setup not valid') : `not applicable (${s.reason})`}
+            <strong>{s.label}</strong>: {s.applies ? (s.pass ? (s.shadow ? 'confirmed (shadow mode: shown, not traded)' : 'setup valid') : 'setup not valid') : `not applicable (${s.reason})`}
+            {s.code && <span className="hint"> · {s.code}</span>}
             {s.applies && <ul className="reasons">{s.checks.map((c) => <li key={c.key}>{c.ok ? '✓' : '✗'} {c.label}: {c.detail}</li>)}</ul>}
           </div>
         ))}

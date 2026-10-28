@@ -43,6 +43,14 @@ const median = (xs) => {
 };
 const imbalance = (bid, ask) => (bid + ask > 0 ? (bid - ask) / (bid + ask) : null);
 
+/** Median ₹ spread of the depth samples in [09:17:30, 09:18:00) (strategy D's frozen buffer): { rupees, samples }. */
+export function spreadRef(samples, startAt) {
+  const xs = samples.filter((x) => x.t >= startAt + 150_000 && x.t < startAt + 180_000 && x.spread > 0).map((x) => x.spread).sort((a, b) => a - b);
+  if (!xs.length) return { rupees: null, samples: 0 };
+  const m = Math.floor(xs.length / 2);
+  return { rupees: xs.length % 2 ? xs[m] : (xs[m - 1] + xs[m]) / 2, samples: xs.length };
+}
+
 /** Summary of one five-level depth snapshot. */
 export function depthSummary(depth) {
   const bids = (depth?.buy ?? []).filter((l) => l.price > 0 && l.qty > 0);
@@ -109,7 +117,7 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
         ticks: 0, lastTime: 0, lastKey: null, baselineVolume: null, baselineSource: null, lastVolume: null,
         resets: 0, outOfOrder: 0, duplicates: 0, minutes: Array.from({ length: MINUTES }, () => null),
         minuteVolume: Array(MINUTES).fill(0), windowVolume: 0, last: null, firstInWindow: null, depth: [],
-        vwapSides: [], oiFirst: null, preTick: null,
+        vwapSides: [], minuteVwap: Array(MINUTES).fill(null), oiFirst: null, preTick: null,
       });
     }
     return state.get(token);
@@ -181,9 +189,10 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
       if (m.kind === 'future' && tick.oi != null) s.oiFirst ??= tick.oi;
       if (m.kind === 'stock') {
         if (tick.avgPrice > 0 && tick.ltp > 0) s.vwapSides.push(Math.sign(tick.ltp - tick.avgPrice));
+        if (tick.avgPrice > 0) s.minuteVwap[minute] = tick.avgPrice; // Kite's average price as of each minute's last tick
         if (tick.depth) {
           const d = depthSummary(tick.depth);
-          if (d.usable) s.depth.push({ t, spreadBps: d.spreadBps, imb5: d.imbalance5, imb3: d.imbalance3, imbBest: d.imbalanceBest, qty5: d.bidQty5 + d.askQty5, liquidity5: d.liquidity5 });
+          if (d.usable) s.depth.push({ t, spread: d.spread, spreadBps: d.spreadBps, imb5: d.imbalance5, imb3: d.imbalance3, imbBest: d.imbalanceBest, qty5: d.bidQty5 + d.askQty5, liquidity5: d.liquidity5 });
         }
       }
     }
@@ -278,6 +287,11 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
       lowerWickPct: range > 0 ? ((Math.min(open, ltp) - orLow) / range) * 100 : null,
       minuteReturns, last2MinPct: pct(ltp, close2Ago),
       windowVolume: s.windowVolume, minuteVolume: [...s.minuteVolume],
+      // Strategy D: median baselines (Kite 1-minute candles, earlier sessions), each minute's VWAP as of its
+      // last tick, and the reference spread: the median ₹ spread in the last 30 s before 09:18.
+      volumeBaselines: m.volumeMedians ? { ...m.volumeMedians, source: 'Kite 1-minute candles, earlier sessions (median)' } : null,
+      minuteVwap: [...s.minuteVwap],
+      spreadRef: spreadRef(s.depth, startAt),
       volumePerMinute: s.windowVolume / Math.max(1, Math.min(MINUTES, (Math.min(at, sealAt) - startAt) / 60_000)),
       rvol: m.openVol5Avg ? s.windowVolume / m.openVol5Avg : null,
       volAccel: firstRate > 0 ? lastRate / firstRate : null,
@@ -298,7 +312,7 @@ export function createOpeningWindow({ date, instruments, impactNotional = DEFAUL
       vwapDistPct: pct(ltp, vwap), vwapCrosses: crosses,
       vwapReclaim: s.vwapSides.length > 1 ? s.vwapSides.slice(0, -1).some((x) => x < 0) && s.vwapSides.at(-1) > 0 : null,
       vwapReject: s.vwapSides.length > 1 ? s.vwapSides.slice(0, -1).some((x) => x > 0) && s.vwapSides.at(-1) < 0 : null,
-      distPrevHighPct: pct(ltp, m.prevHigh), distPrevLowPct: pct(ltp, m.prevLow),
+      prevHigh: m.prevHigh ?? null, prevLow: m.prevLow ?? null, distPrevHighPct: pct(ltp, m.prevHigh), distPrevLowPct: pct(ltp, m.prevLow),
       atr14: m.atr14 ?? null, orRangeAtr: m.atr14 ? range / m.atr14 : null,
       upperCircuit: m.upperCircuit ?? null, lowerCircuit: m.lowerCircuit ?? null,
       totalBuyQty: last.buyQty ?? null, totalSellQty: last.sellQty ?? null,

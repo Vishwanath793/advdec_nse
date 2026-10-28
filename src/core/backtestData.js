@@ -1,5 +1,5 @@
 import { indiaDate, marketDay, previousTradingDays } from './calendar.js';
-import { createRateLimiter, openingVolumeAverage } from './kiteHistory.js';
+import { createRateLimiter, openingMedians, openingVolumeAverage } from './kiteHistory.js';
 import { sectorIndexKey } from '../utils/confirmation.js';
 
 /**
@@ -13,8 +13,9 @@ import { sectorIndexKey } from '../utils/confirmation.js';
  *  - Kite 1-minute candles are downloaded once per stock and cached in
  *    `candles/<SYMBOL>.json` (by day), so repeated runs cost nothing. Today's
  *    incomplete day is never cached. A request covers at most SPAN_DAYS.
- *  - The RVOL baseline is the average 09:15–09:20 volume of the ten trading days
+ *  - The RVOL baseline is the average 09:15–09:20 volume of the 20 trading days
  *    before the tested day, from the same candles: never from the tested day or later.
+ *    Strategy D's median baselines (opening window and each clock minute) come from the same days.
  *
  * Known biases (shown on the Research page): only stocks in the current master
  * list and the current instruments dump, so delisted or renamed stocks are
@@ -26,7 +27,7 @@ export const MAX_GAP_PCT = 20; // above this, assume a corporate action rather t
 export const DEFAULT_MAX_PER_DAY = 15;
 export const MAX_DAYS = 60;
 export const SPAN_DAYS = 55; // Kite allows 60 days of 1-minute data per request
-export const BASELINE_DAYS = 10;
+export const BASELINE_DAYS = 20; // the same look-back as live (kiteHistory OPENING_VOLUME_DAYS)
 const ATR_PERIOD = 14;
 const MARKET_INDICES = ['NIFTY 50', 'NIFTY BANK'];
 const cacheFile = (name) => `candles/${name}.json`;
@@ -195,8 +196,16 @@ export function createBacktestData({ store, kite, instruments, calendar, context
         if (!c) continue;
         if (!today?.length) { noCandles.push(`${d.date} ${s.symbol}`); continue; }
         // The RVOL baseline: the ten trading days before, never the tested day or later.
-        const base = openingVolumeAverage(asDate(baseline.flatMap((b) => c.days[b] ?? [])), d.date);
-        stocks.push({ meta: { ...s.meta, token: c.e.token, tick: c.e.tick, lot: c.e.lot, openVol5Avg: base?.avg ?? null }, candles: asDate(today) });
+        const before = asDate(baseline.flatMap((b) => c.days[b] ?? []));
+        const base = openingVolumeAverage(before, d.date);
+        const md = openingMedians(before, d.date);
+        stocks.push({
+          meta: {
+            ...s.meta, token: c.e.token, tick: c.e.tick, lot: c.e.lot, openVol5Avg: base?.avg ?? null,
+            volumeMedians: md ? { openingMedian: md.openingMedian, minuteMedian: md.minuteMedian, sessions: md.sessions } : null,
+          },
+          candles: asDate(today),
+        });
       }
       const indices = Object.fromEntries([...indexCandles].map(([name, byDay]) => [name, asDate(byDay[d.date] ?? [])]));
       return { date: d.date, recorded: d.recorded, stocks, indices };

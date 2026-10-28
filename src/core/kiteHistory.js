@@ -18,7 +18,7 @@ export const ATR_PERIOD = 14;
 /** 20 completed sessions, the same look-back as the other research comparisons. */
 export const OPENING_VOLUME_DAYS = 20;
 /** Bump when the cached fields change, so older cache entries are fetched again. */
-const HISTORY_VERSION = 3;
+const HISTORY_VERSION = 4; // 4: per-minute median volume baselines (strategy D)
 const file = (date) => `history/${date}.json`;
 // One formatter, reused: building an Intl.DateTimeFormat per call is slow in backtest loops.
 const IST_HHMM = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -50,7 +50,10 @@ export function openingWindowDays(minuteCandles, today) {
     const d = indiaDate(t);
     const time = ist(t);
     if (d >= today || time < '09:15' || time >= '09:20') continue;
-    const day = byDay.get(d) ?? byDay.set(d, { volume: 0, value: 0, candles: 0, open: null, first: Infinity, high: -Infinity, low: Infinity }).get(d);
+    const day = byDay.get(d) ?? byDay.set(d, { date: d, volume: 0, value: 0, candles: 0, minutes: [null, null, null, null, null], open: null, first: Infinity, high: -Infinity, low: Infinity }).get(d);
+    const i = Number(time.slice(3)) - 15;
+    if (day.minutes[i] != null) continue; // a duplicate minute counts once
+    day.minutes[i] = v;
     day.volume += v;
     day.value += v * ((h + l + c) / 3);
     day.candles += 1;
@@ -59,7 +62,7 @@ export function openingWindowDays(minuteCandles, today) {
     day.low = Math.min(day.low, l);
   }
   return [...byDay.values()].filter((d) => d.candles === 5)
-    .map((d) => ({ volume: d.volume, value: d.value, rangePct: d.open > 0 ? ((d.high - d.low) / d.open) * 100 : null }));
+    .map((d) => ({ date: d.date, volume: d.volume, value: d.value, minutes: d.minutes, rangePct: d.open > 0 ? ((d.high - d.low) / d.open) * 100 : null }));
 }
 
 const avgOf = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
@@ -68,6 +71,30 @@ const avgOf = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : n
 export function openingVolumeAverage(minuteCandles, today) {
   const days = openingWindowDays(minuteCandles, today);
   return days.length ? { avg: avgOf(days.map((d) => d.volume)), days: days.length } : null;
+}
+
+const median = (xs) => {
+  const s = xs.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+  if (!s.length) return null;
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+/**
+ * Strategy D's baselines: over the latest `sessions` complete days before `today` (all five unique
+ * 09:15–09:19 minutes), the median opening-window volume and the median volume of each clock minute,
+ * each computed directly (the median of totals is not the sum of minute medians). { openingMedian,
+ * minuteMedian: [5], sessions, dates } or null.
+ */
+export function openingMedians(minuteCandles, today, sessions = OPENING_VOLUME_DAYS) {
+  const days = openingWindowDays(minuteCandles, today).sort((a, b) => a.date.localeCompare(b.date)).slice(-sessions);
+  if (!days.length) return null;
+  return {
+    openingMedian: median(days.map((d) => d.volume)),
+    minuteMedian: [0, 1, 2, 3, 4].map((i) => median(days.map((d) => d.minutes[i]))),
+    sessions: days.length,
+    dates: days.map((d) => d.date),
+  };
 }
 
 /** Average 09:15–09:20 volume, value and range over complete days: the research baselines. */
@@ -112,7 +139,7 @@ export function createHistoryService({ store, kite, calendar, now = () => new Da
     const errors = [];
     const call = (args) => limiter.run(() => kite.historical({ apiKey, accessToken, ...args }));
     for (const item of missing) {
-      const out = { v: HISTORY_VERSION, atr14: null, openVol5Avg: null, openValueAvg: null, openRangePctAvg: null, openVolDays: 0, prevOi: null, prevDay: null };
+      const out = { v: HISTORY_VERSION, atr14: null, openVol5Avg: null, openValueAvg: null, openRangePctAvg: null, openVolDays: 0, prevOi: null, prevDay: null, volumeMedians: null };
       try {
         const daily = await call({ token: item.token, interval: 'day', from: `${days[0]} 00:00:00`, to: `${days.at(-1)} 23:59:59` });
         out.atr14 = atrFromDayCandles(daily, today);
@@ -121,6 +148,8 @@ export function createHistoryService({ store, kite, calendar, now = () => new Da
         const minutes = await call({ token: item.token, interval: 'minute', from: `${firstOpenDay} 09:15:00`, to: `${days.at(-1)} 09:20:00` });
         const ov = openingWindowAverages(minutes, today);
         if (ov) { out.openVol5Avg = ov.volume; out.openValueAvg = ov.value; out.openRangePctAvg = ov.rangePct; out.openVolDays = ov.days; }
+        const md = openingMedians(minutes, today);
+        if (md) out.volumeMedians = { openingMedian: md.openingMedian, minuteMedian: md.minuteMedian, sessions: md.sessions };
         if (item.futureToken) {
           const fut = await call({ token: item.futureToken, interval: 'day', from: `${days.at(-1)} 00:00:00`, to: `${days.at(-1)} 23:59:59`, oi: true });
           const last = fut.at(-1);

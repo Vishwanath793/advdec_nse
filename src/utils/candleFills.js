@@ -76,7 +76,8 @@ export function simulateCandleDay({ date, decisions, candlesBySymbol, risk = {},
     for (const t of trades) {
       const c = candleAt(t, m);
       if (t.status === 'PENDING') {
-        if (m >= s.entryUntil) { t.status = 'EXPIRED'; t.reason = `not triggered by ${s.entryUntil}`; continue; }
+        const until = t.plan.entryDeadline && t.plan.entryDeadline < s.entryUntil ? t.plan.entryDeadline : s.entryUntil;
+        if (m >= until) { t.status = 'EXPIRED'; t.reason = `not triggered by ${until}`; continue; }
         if (!c) continue;
         const [, o, h, l] = c;
         const up = t.direction > 0;

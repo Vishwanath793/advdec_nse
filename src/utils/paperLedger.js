@@ -213,6 +213,13 @@ export function gapOrderEvents(state, entries, { at, activeFrom, expiresAt, tagP
 }
 
 /** Orders for today's BUY/SELL decisions; ids are per day, symbol and strategy, so a restart can't place one twice. */
+/** The earlier of the global entry cutoff and a plan's own deadline (HH:MM IST), e.g. strategy D's 09:21. */
+function entryExpiry(date, entryUntilAt, deadline) {
+  if (!deadline || entryUntilAt == null) return entryUntilAt;
+  const own = +istInstant(date, deadline);
+  return own < time(entryUntilAt) ? new Date(own).toISOString() : entryUntilAt;
+}
+
 export function orderEvents(state, decision, { at, entryUntilAt, tagPrefix = 'P920' } = {}) {
   const events = [];
   for (const d of decision.decisions ?? []) {
@@ -226,7 +233,7 @@ export function orderEvents(state, decision, { at, entryUntilAt, tagPrefix = 'P9
         id, tag: `${tagPrefix}${d.symbol}`.replace(/[^A-Za-z0-9]/g, '').slice(0, 20), symbol: d.symbol, token: d.token,
         side: p.side, direction: p.direction, strategy: d.strategy, product: 'MIS', qty: p.qty, firstExitQty: p.firstExitQty,
         trigger: p.trigger, maxEntry: p.maxEntry, stop: p.stop, target1: p.target1, target2: p.target2, immediate: p.immediate,
-        score: d.score, expiresAt: entryUntilAt, ...(p.chargeRates ? { chargeRates: p.chargeRates } : {}),
+        score: d.score, expiresAt: entryExpiry(state.date, entryUntilAt, p.entryDeadline), ...(p.chargeRates ? { chargeRates: p.chargeRates } : {}),
       },
     });
   }

@@ -60,11 +60,11 @@ test('planner: recorded days carry the 09:10 conviction; days without data or st
   assert.deepEqual(plan.symbols, ['AAA', 'BBB']);
 });
 
-test('needed days: each tested day plus the ten trading days before it (the RVOL baseline)', () => {
+test('needed days: each tested day plus the 20 trading days before it (the RVOL baseline)', () => {
   const plan = planBacktest({ dates: ['2026-10-14'], bhav: bhavFixture(), sectors });
   const need = neededDays(plan, calendar).get('AAA');
   assert.equal(need.at(-1), '2026-10-14');
-  assert.equal(need.length, 11);
+  assert.equal(need.length, 21);
   assert.ok(need.every((d) => d <= '2026-10-14'));
   assert.ok(!need.includes('2026-10-10') && !need.includes('2026-10-11')); // a weekend
 });
@@ -157,6 +157,7 @@ test('loadDays: gapped stocks with tokens, candles, the RVOL baseline from earli
   assert.equal(aaa.meta.convictionScore, 81);
   assert.equal(aaa.meta.token, 11);
   assert.equal(aaa.meta.openVol5Avg, 5_000); // five 1,000-volume candles on each earlier day; never the tested day's 10,000s
+  assert.deepEqual(aaa.meta.volumeMedians, { openingMedian: 5_000, minuteMedian: [1_000, 1_000, 1_000, 1_000, 1_000], sessions: 20 });
   assert.ok(aaa.candles[0][0] instanceof Date);
   assert.ok(day.indices['NIFTY 50'].length > 0 && day.indices['NIFTY IT'].length > 0);
   assert.ok(r.requests >= 4); // AAA, plus three indices

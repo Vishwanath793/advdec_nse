@@ -179,6 +179,7 @@ export function createOpeningCollector({
         m.openValueAvg = hx.openValueAvg ?? null;
         m.openRangePctAvg = hx.openRangePctAvg ?? null;
         m.openVolDays = hx.openVolDays ?? 0;
+        m.volumeMedians = hx.volumeMedians ?? null; // strategy D: median opening and per-minute volume
         const fut = universe.futures.find((f) => f.underlying === s.symbol);
         if (fut && hx.prevOi != null) meta[fut.token].prevOi = hx.prevOi;
       }

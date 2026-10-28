@@ -3,7 +3,7 @@ import { createPaperBroker } from './paperBroker.js';
 import { cleanScoringSettings, decideOpening, decisionRow, DEFAULT_SCORING_SETTINGS } from '../utils/decision.js';
 import { GAP_CHECK_FALLBACK_MS, ledgerDay } from '../utils/paperLedger.js';
 import { cleanRiskSettings, DEFAULT_RISK_SETTINGS, tradeBlockers } from '../utils/risk.js';
-import { DEFAULT_STRATEGY_SETTINGS, strategySettings } from '../utils/strategies.js';
+import { DEFAULT_STRATEGY_SETTINGS, STRATEGY_CHOICES, strategySettings } from '../utils/strategies.js';
 import { cleanGapExitSettings, DEFAULT_GAP_EXIT_SETTINGS, gapExitPlan } from '../utils/gapExits.js';
 import { SIMULATED_DATE, SIMULATED_GAP_LIST } from '../utils/simulatedMorning.js';
 
@@ -53,6 +53,10 @@ function cleanStrategies(input = {}) {
   return Object.fromEntries(Object.entries(DEFAULT_STRATEGY_SETTINGS).map(([k, d]) => [k, Object.fromEntries(Object.entries(d).map(([f, v]) => {
     const x = merged[k][f];
     if (typeof v === 'boolean') return [f, typeof x === 'boolean' ? x : v];
+    if (typeof v === 'string') {
+      if (STRATEGY_CHOICES[f]) return [f, STRATEGY_CHOICES[f].includes(x) ? x : v];
+      return [f, /^09:(2\d|[3-5]\d)$|^1[0-4]:[0-5]\d$/.test(x ?? '') ? x : v]; // a time, 09:20–14:59
+    }
     const n = Number(x);
     return [f, Number.isFinite(n) ? n : v];
   }))]));

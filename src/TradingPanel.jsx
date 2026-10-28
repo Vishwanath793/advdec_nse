@@ -192,7 +192,36 @@ export const STRATEGY_FIELDS = {
     ['maxVwapDistPct', 'Max distance from VWAP %'], ['maxRet5Pct', 'Max 5-min move %'], ['maxRangeAtr', 'Max range × ATR'], ['minStability', 'Min book stability (0–1)'],
     ['minImbalance', 'Min book imbalance'], ['minStopAtr', 'Min stop × ATR'], ['maxSpreadBps', 'Max spread (bps)'], ['target1R', 'Target 1 (R)'], ['target2R', 'Target 2 (R)'],
   ],
+  breakHold: [
+    ['minOpeningRvol', 'Min opening RVOL (median)'], ['minBreakoutRvol', 'Min 09:18-minute RVOL (median)'], ['minBodyRatio', 'Min breakout body (0–1)'],
+    ['minCloseLocation', 'Min breakout close location (0–1)'], ['maxWickRatio', 'Rejection wick shown above (0–1)'], ['bufferTicks', 'Buffer: at least ticks'],
+    ['bufferRangeFrac', 'Buffer: at least × the 3-minute range'], ['minSpreadSamples', 'Min spread samples before 09:18'], ['minBaselineSessions', 'Min earlier sessions'],
+    ['maxSpreadBps', 'Max spread (bps)'], ['maxChaseR', 'Max chase (× structural risk)'], ['target1R', 'Target 1 (R, before obstacles)'], ['target2R', 'Target 2 (R)'],
+    ['minFirstTargetRR', 'Min reward/risk to target 1 (after costs)'],
+  ],
 };
+
+/** A strategy's switches and text settings: shorts, D's shadow/paper mode and its entry deadline. */
+export function StrategyExtras({ cfg, set }) {
+  return (
+    <>
+      {'allowShorts' in cfg && (
+        <label className="field-inline"><input type="checkbox" checked={cfg.allowShorts} onChange={(e) => set('allowShorts', e.target.checked)} /> Allow shorts (MIS intraday only)</label>
+      )}
+      {'mode' in cfg && (
+        <label className="field-inline">Mode
+          <select value={cfg.mode} onChange={(e) => set('mode', e.target.value)}>
+            <option value="shadow">Shadow: evaluate and show, never trade</option>
+            <option value="paper">Paper: trade it on paper</option>
+          </select>
+        </label>
+      )}
+      {'entryDeadline' in cfg && (
+        <label className="field-inline">No entry from (IST)<input type="time" value={cfg.entryDeadline} onChange={(e) => set('entryDeadline', e.target.value)} /></label>
+      )}
+    </>
+  );
+}
 const THRESHOLD_FIELDS = [
   ['holdOpenFlatPct', 'Holding the open: flat within ±%'], ['closePosGood', 'Close position: pass at (0–1)'], ['closePosOk', 'Close position: warn at (0–1)'],
   ['maxWickPct', 'Candle: max rejection wick %'], ['consistentGood', 'Consistent minutes: pass at'], ['consistentOk', 'Consistent minutes: warn at'],
@@ -300,7 +329,10 @@ const RISK_FIELDS = [
   ['maxTradesPerDay', 'Max trades a day'], ['minRewardRisk', 'Min reward/risk (after costs)'], ['maxConsecutiveLosses', 'Stop after losses in a row'],
   ['misLeverage', 'MIS leverage (check your broker)'], ['slippageBps', 'Paper slippage (bps)'], ['maxSlippageBps', 'Max entry slippage (bps)'], ['maxSpreadBps', 'Max spread (bps)'],
 ];
-export const STRATEGY_LABELS = { orb: 'A. Opening-range breakout / breakdown', gapPullback: 'B. Gap-up pullback recovery (≥ 3.75% gap)', momentum: 'C. Opening momentum' };
+export const STRATEGY_LABELS = {
+  orb: 'A. Opening-range breakout / breakdown', gapPullback: 'B. Gap-up pullback recovery (≥ 3.75% gap)', momentum: 'C. Opening momentum',
+  breakHold: 'D. 3-minute break and hold (09:15–09:18 range, broken at 09:18, held at 09:19)',
+};
 
 const GAP_FIELDS = [
   ['noiseAtr', 'Noise stop floor (× ATR)'], ['gapLineBufferAtr', 'Buffer below the half-gap (× ATR)'], ['wideStopAtr', 'Large/extreme stop (× ATR)'], ['maxStopAtr', 'Widest stop (× ATR)'],
@@ -420,13 +452,14 @@ export function TradingSettings() {
             {fields.map(([k, label]) => (
               <label key={k} className="field-inline">{label}<input type="number" step="any" value={s.strategies[g][k]} onChange={(e) => setStrat(g, k, e.target.value)} /></label>
             ))}
-            {'allowShorts' in s.strategies[g] && (
-              <label className="field-inline"><input type="checkbox" checked={s.strategies[g].allowShorts} onChange={(e) => setStrat(g, 'allowShorts', e.target.checked)} /> Allow shorts (MIS intraday only)</label>
-            )}
+            <StrategyExtras cfg={s.strategies[g]} set={(k, v) => setStrat(g, k, v)} />
           </div>
         </div>
       ))}
-      <p className="hint">Every threshold is a hypothesis to test on recorded days, not a known edge.</p>
+      <p className="hint">
+        Every threshold is a hypothesis to test on recorded days, not a known edge. D starts in shadow mode: its spec makes paper trading wait
+        until the opening-volume convention (live cumulative volume vs Kite&apos;s historical minute bars) has been checked on several mornings.
+      </p>
       {s.gapExits && <GapExitFields g={s.gapExits} set={(g) => setS({ ...s, gapExits: g })} />}
       <div className="ai-row">
         <button type="button" className="btn" onClick={save}>Save trading settings</button>

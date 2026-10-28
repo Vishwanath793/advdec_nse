@@ -27,9 +27,17 @@ export const DEFAULT_STRATEGY_SETTINGS = {
     maxVwapDistPct: 1.5, maxRet5Pct: 3.0, maxRangeAtr: 1.2, minStability: 0.4, minImbalance: -0.1,
     maxSpreadBps: 15, minStopAtr: 0.2, target1R: 1.5, target2R: 3,
   },
+  breakHold: {
+    enabled: true, mode: 'shadow', allowShorts: true, // shadow: evaluated and shown, never traded; 'paper' trades it
+    minOpeningRvol: 1.5, minBreakoutRvol: 1.5, minBodyRatio: 0.6, minCloseLocation: 0.75, maxWickRatio: 0.25,
+    bufferTicks: 2, bufferRangeFrac: 0.05, minSpreadSamples: 3, minBaselineSessions: 15, maxSpreadBps: 15,
+    maxChaseR: 0.5, target1R: 2, target2R: 3, minFirstTargetRR: 1.5, entryDeadline: '09:21',
+  },
 };
+/** Text settings and their allowed values (the rest are numbers or switches; entryDeadline is a time). */
+export const STRATEGY_CHOICES = { mode: ['shadow', 'paper'] };
 
-export const STRATEGY_LABEL = { orb: 'Opening-range breakout', gapPullback: 'Gap-up pullback recovery', momentum: 'Opening momentum' };
+export const STRATEGY_LABEL = { orb: 'Opening-range breakout', gapPullback: 'Gap-up pullback recovery', momentum: 'Opening momentum', breakHold: '3-minute break and hold' };
 
 const f2 = (n) => (n == null || !Number.isFinite(n) ? 'n/a' : n.toFixed(2));
 const sideWord = (dir) => (dir > 0 ? 'long' : 'short');
@@ -166,7 +174,115 @@ export function openingMomentum(f, cfg = DEFAULT_STRATEGY_SETTINGS.momentum) {
   return result({ applies: true, direction: dir, signal, summary: `${sideWord(dir)} momentum setup` });
 }
 
-export const STRATEGIES = { orb: openingRangeBreakout, gapPullback: gapUpPullbackRecovery, momentum: openingMomentum };
+/*
+ * D. Three-minute break and hold (docs/plan-920-volume-breakout-confirmation.md). The reference is the
+ * C1–C3 range (09:15–09:18), frozen before the break; C4 (09:18–09:19) must break it with a strong candle on
+ * at least 1.5× its usual same-minute volume, and C5 (09:19–09:20) must close beyond the buffered level again
+ * without retesting deep inside. Every rule is a gate; Nifty, sector, OI and acceleration stay context.
+ * Starts in shadow mode (evaluated and shown, never traded) until the opening-volume convention has been
+ * reconciled against Kite's historical minute bars; switch it to paper in Settings.
+ */
+export const BREAK_HOLD_CODES = {
+  shorts: 'SHORTS_OFF', history: 'INSUFFICIENT_VOLUME_HISTORY', breakoutVolume: 'WEAK_BREAKOUT_VOLUME', candle: 'WEAK_BREAKOUT_CANDLE',
+  hold: 'HOLD_NOT_CONFIRMED', holdDepth: 'HOLD_TOO_DEEP', vwap: 'WRONG_SIDE_OF_VWAP', openingVolume: 'WEAK_OPENING_VOLUME',
+  spreadRef: 'DATA_INSUFFICIENT', spread: 'SPREAD_TOO_WIDE', beyond: 'PRICE_BACK_INSIDE', chase: 'EXTENDED_ENTRY', obstacle: 'OBSTACLE_TOO_CLOSE',
+};
+const tickUp = (p, tick) => Math.round(Math.ceil(p / tick - 1e-9) * tick * 100) / 100;
+const tickDown = (p, tick) => Math.round(Math.floor(p / tick + 1e-9) * tick * 100) / 100;
+
+export function breakAndHold(f, cfg = DEFAULT_STRATEGY_SETTINGS.breakHold) {
+  const { check, result } = make('breakHold');
+  const done = (fields) => {
+    const r = result(fields);
+    const failed = r.checks.find((c) => !c.ok);
+    r.code = !r.applies ? fields.code ?? null : failed ? BREAK_HOLD_CODES[failed.key] ?? 'NOT_CONFIRMED' : r.signal ? 'CONFIRMED' : 'NOT_CONFIRMED';
+    if (r.pass && cfg.mode !== 'paper') { r.shadow = true; r.reason = 'confirmed in shadow mode: shown, not traded (Settings: switch D to paper)'; }
+    return r;
+  };
+  if (!cfg.enabled) return done({ applies: false, reason: 'turned off', code: 'OFF' });
+  const c = f.candles ?? [];
+  if (c.length < 5 || c.slice(0, 5).some((x) => !x)) return done({ applies: false, reason: 'a minute 09:15–09:19 has no data', code: 'DATA_INSUFFICIENT' });
+  const [c1, c2, c3, c4, c5] = c;
+  const tick = f.tick || 0.05;
+  const H3 = Math.max(c1.h, c2.h, c3.h);
+  const L3 = Math.min(c1.l, c2.l, c3.l);
+  const W3 = H3 - L3;
+  if (!(W3 > 0)) return done({ applies: false, reason: 'no 09:15–09:18 range', code: 'DATA_INSUFFICIENT' });
+  // The frozen buffer: at least two ticks, the reference spread (live only) and 5% of the reference range.
+  const spread = f.spreadRef?.samples >= cfg.minSpreadSamples ? f.spreadRef.rupees : null;
+  const b = tickUp(Math.max(cfg.bufferTicks * tick, spread ?? 0, cfg.bufferRangeFrac * W3), tick);
+  const longT = tickUp(H3 + b, tick);
+  const shortT = tickDown(L3 - b, tick);
+  const metrics = { H3, L3, b, longThreshold: longT, shortThreshold: shortT, bufferSource: noBook(f) ? 'proxy (no spread in candle data)' : spread != null ? 'reference spread' : 'ticks and range only' };
+  // Which high-volume candle of C1–C3 (context, never the reference).
+  const mm = f.volumeBaselines?.minuteMedian ?? [];
+  const firstThree = [c1, c2, c3].map((x, i) => ({ i, volume: x.volume, rvol: mm[i] > 0 ? x.volume / mm[i] : null }));
+  metrics.largestVolumeMinute = firstThree.reduce((a, x) => (x.volume > a.volume ? x : a)).i + 1;
+  const byRvol = firstThree.filter((x) => x.rvol != null);
+  metrics.largestRvolMinute = byRvol.length ? byRvol.reduce((a, x) => (x.rvol > a.rvol ? x : a)).i + 1 : null;
+
+  let dir = 0;
+  if (c4.o <= longT && c4.c >= longT) dir = 1;
+  else if (c4.o >= shortT && c4.c <= shortT) dir = -1;
+  if (!dir) {
+    const why = c4.o > longT || c4.o < shortT ? ['already beyond the level when 09:18 opened: outside this strategy', 'OUTSIDE_PRIMARY']
+      : c4.h >= longT || c4.l <= shortT ? ['09:18 crossed the level but closed back inside', 'NO_BREAKOUT_CLOSE']
+        : c5.c >= longT || c5.c <= shortT ? ['the break started in the last minute: wait (no 09:20 confirmation)', 'WAIT']
+          : ['no break of the 09:15–09:18 range', 'NO_BREAK'];
+    return done({ applies: false, reason: why[0], code: why[1], metrics });
+  }
+  const T = dir > 0 ? longT : shortT;
+  const side = dir > 0 ? 'above' : 'below';
+  if (dir < 0) check('shorts', 'Shorts allowed (MIS only)', cfg.allowShorts, cfg.allowShorts ? 'intraday short' : 'short selling turned off');
+  const vb = f.volumeBaselines;
+  const histOk = Boolean(vb && vb.sessions >= cfg.minBaselineSessions && vb.openingMedian > 0 && vb.minuteMedian?.[3] > 0);
+  check('history', 'Volume history', histOk, vb ? `${vb.sessions} earlier sessions (min ${cfg.minBaselineSessions}), median opening volume ${vb.openingMedian ?? 'n/a'}` : 'no median volume baselines');
+  const breakoutRvol = histOk ? c4.volume / vb.minuteMedian[3] : null;
+  const openingRvol = histOk ? f.windowVolume / vb.openingMedian : null;
+  check('breakoutVolume', '09:18 minute on strong volume', breakoutRvol != null && breakoutRvol >= cfg.minBreakoutRvol, `${f2(breakoutRvol)}× the usual 09:18 minute (min ${cfg.minBreakoutRvol})`);
+  const r4 = c4.h - c4.l;
+  const body = r4 > 0 ? (dir * (c4.c - c4.o)) / r4 : null;
+  const closeLoc = r4 > 0 ? (dir > 0 ? c4.c - c4.l : c4.h - c4.c) / r4 : null;
+  const wick = r4 > 0 ? (dir > 0 ? c4.h - c4.c : c4.c - c4.l) / r4 : null;
+  check('candle', 'Strong breakout candle', body != null && body >= cfg.minBodyRatio && closeLoc >= cfg.minCloseLocation,
+    `body ${f2(body)} of the range (min ${cfg.minBodyRatio}), close location ${f2(closeLoc)} (min ${cfg.minCloseLocation}), rejection wick ${f2(wick)}${wick > cfg.maxWickRatio ? ` (above ${cfg.maxWickRatio})` : ''}`);
+  check('hold', `09:19 closes ${side} the level again`, dir * (c5.c - T) >= 0, `09:19 close ${f2(c5.c)} vs level ${f2(T)}`);
+  const limit = dir > 0 ? H3 - b : L3 + b;
+  check('holdDepth', 'Retest no deeper than the buffer', dir > 0 ? c5.l >= limit : c5.h <= limit, `09:19 ${dir > 0 ? 'low' : 'high'} ${f2(dir > 0 ? c5.l : c5.h)} vs ${f2(limit)}`);
+  const v4 = f.minuteVwap?.[3];
+  const v5 = f.minuteVwap?.[4];
+  check('vwap', `09:18, 09:19 and now ${side} VWAP`, v4 != null && v5 != null && f.vwap != null && dir * (c4.c - v4) > 0 && dir * (c5.c - v5) > 0 && dir * (f.ltp - f.vwap) > 0,
+    `closes ${f2(c4.c)} / ${f2(c5.c)} vs VWAP ${f2(v4)} / ${f2(v5)}; now ${f2(f.ltp)} vs ${f2(f.vwap)} (${f.vwapSource ?? 'VWAP'})`);
+  check('openingVolume', 'Opening five minutes on strong volume', openingRvol != null && openingRvol >= cfg.minOpeningRvol, `${f2(openingRvol)}× the median opening (min ${cfg.minOpeningRvol})`);
+  check.book(f, 'spreadRef', 'Reference spread measured before 09:18', spread != null, `${f.spreadRef?.samples ?? 0} spread samples 09:17:30–09:18 (min ${cfg.minSpreadSamples})`);
+  liquid(check, f, cfg.maxSpreadBps);
+
+  const S = dir > 0 ? tickDown(Math.min(c4.l, c5.l) - b, tick) : tickUp(Math.max(c4.h, c5.h) + b, tick);
+  const structural = dir * (T - S);
+  const entry = noBook(f) ? f.ltp : dir > 0 ? f.depth?.bestAsk ?? f.ltp : f.depth?.bestBid ?? f.ltp;
+  check('beyond', `Price still ${side} the level`, dir * (entry - T) >= 0, `entry ${f2(entry)} vs level ${f2(T)}`);
+  check('chase', 'Entry not extended', structural > 0 && dir * (entry - T) <= cfg.maxChaseR * structural,
+    `${f2(dir * (entry - T))} beyond the level (max ${f2(cfg.maxChaseR * structural)}: ${cfg.maxChaseR}× the structural risk)`);
+  // First target: target1R from the entry, capped before the nearest known obstacle (previous-day high/low, circuit).
+  const R = dir * (entry - S);
+  const obstacles = [dir > 0 ? f.prevHigh : f.prevLow, dir > 0 ? f.upperCircuit : f.lowerCircuit].filter((x) => x > 0 && dir * (x - entry) > 0);
+  const nearest = obstacles.length ? (dir > 0 ? Math.min(...obstacles) : Math.max(...obstacles)) : null;
+  const cap = nearest != null ? nearest - dir * b : null;
+  if (cap != null) check('obstacle', 'Room before the nearest obstacle', dir * (cap - entry) > 0, `${dir > 0 ? 'previous-day high or circuit' : 'previous-day low or circuit'} at ${f2(nearest)}, less the buffer: ${f2(cap)}`);
+  const capped = (p) => (cap == null ? p : dir > 0 ? Math.min(p, cap) : Math.max(p, cap));
+  const target1 = capped(entry + dir * cfg.target1R * R);
+  const t2 = capped(entry + dir * cfg.target2R * R);
+  const target2 = dir * t2 >= dir * target1 ? t2 : target1;
+  const signal = R > 0 ? {
+    direction: dir, immediate: true, trigger: entry, stop: S, target1, target2,
+    minFirstTargetRR: cfg.minFirstTargetRR, entryDeadline: cfg.entryDeadline,
+    note: `09:15–09:18 range broken at 09:18 and held at 09:19; enter at the ${dir > 0 ? 'ask' : 'bid'} by ${cfg.entryDeadline}; stop ${dir > 0 ? 'below the 09:18–09:19 lows' : 'above the 09:18–09:19 highs'} less the buffer; target 1 ${cfg.target1R}R${cap != null ? ' (capped before the obstacle)' : ''}`,
+  } : null;
+  Object.assign(metrics, { breakoutRvol, openingRvol, body, closeLocation: closeLoc, wick, threshold: T, stop: S, structuralRisk: structural });
+  return done({ applies: true, direction: dir, signal, summary: `${sideWord(dir)} break and hold`, metrics });
+}
+
+export const STRATEGIES = { orb: openingRangeBreakout, gapPullback: gapUpPullbackRecovery, momentum: openingMomentum, breakHold: breakAndHold };
 
 /** Run every enabled strategy on one stock's sealed features. */
 export function runStrategies(features, settings) {

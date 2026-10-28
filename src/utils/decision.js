@@ -51,7 +51,7 @@ export function evaluateStock(f, { strategies, risk, scoring, partial = false, a
     direction: r.direction, strategy: r, plan, preset: scoring.preset, groupWeights: scoring.groupWeights, factorSettings: scoring.factors,
     tiers: scoring.tiers, thresholds: scoring.thresholds, minRewardRisk: risk.minRewardRisk, maxSpreadBps: risk.maxSpreadBps,
   });
-  const tried = results.filter((r) => r.pass).map((r) => {
+  const tried = results.filter((r) => r.pass && !r.shadow).map((r) => {
     const plan = buildTradePlan(r.signal, f, risk, { availableMargin });
     return { result: r, plan, score: scoreOpening(f, options(r, plan)) };
   });
@@ -79,7 +79,10 @@ export function evaluateStock(f, { strategies, risk, scoring, partial = false, a
     score: score.score, tier: score.tier, coverage: score.coverage, groups: score.groups, factors: score.factors,
     plan: best?.plan ?? null, signalNote: best?.result.signal?.note ?? null,
     rejections, reasons,
-    strategies: results.map((r) => ({ strategy: r.strategy, label: r.label, applies: r.applies, pass: r.pass, direction: r.direction ?? null, reason: r.reason ?? null, summary: r.summary ?? null, checks: r.checks })),
+    strategies: results.map((r) => ({
+      strategy: r.strategy, label: r.label, applies: r.applies, pass: r.pass, shadow: Boolean(r.shadow), code: r.code ?? null,
+      direction: r.direction ?? null, reason: r.reason ?? null, summary: r.summary ?? null, checks: r.checks, metrics: r.metrics ?? null,
+    })),
     alternatives: tried.slice(1).map((t) => ({ strategy: t.result.strategy, score: t.score.score, ok: t.plan.ok, rewardRisk: t.plan.rewardRisk })),
   };
 }
